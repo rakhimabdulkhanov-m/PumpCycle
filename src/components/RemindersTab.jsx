@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { nextDue, formatDate } from '../lib/dates.js'
 import { allReminders } from '../lib/reminders.js'
 
