@@ -117,7 +117,7 @@ export default function DueTab({
               value={scheduledCount(customers, sentReminders)}
               className="bg-blue-100 text-blue-900"
             />
-            <div className="ml-auto flex flex-col items-end gap-2">
+            <div className="flex w-full flex-wrap gap-2 sm:ml-auto sm:w-auto sm:flex-col sm:items-end">
               <PriceSettings
                 avgJobPrice={settings.avgJobPrice}
                 onChange={onSetAvgJobPrice}
@@ -172,7 +172,7 @@ export default function DueTab({
                       {formatDate(nextDue(c))}
                     </div>
                     <span
-                      className={`inline-block rounded-full px-3 py-0.5 text-sm font-semibold ${CHIP_STYLES[dueStatus(c)]}`}
+                      className={`inline-block rounded-full px-3 py-0.5 text-base font-semibold ${CHIP_STYLES[dueStatus(c)]}`}
                     >
                       {chip}
                     </span>

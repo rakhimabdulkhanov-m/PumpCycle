@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { nextDue, formatDate } from '../lib/dates.js'
 import { allReminders } from '../lib/reminders.js'
 
@@ -65,12 +65,12 @@ function PreviewPanel({ reminder, customer, onSendNow, onClose }) {
 
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <span
-          className={`rounded-full px-3 py-0.5 text-sm font-semibold ${CHANNEL_STYLES[reminder.channel]}`}
+          className={`rounded-full px-3 py-0.5 text-base font-semibold ${CHANNEL_STYLES[reminder.channel]}`}
         >
           {reminder.channel}
         </span>
         <span
-          className={`rounded-full px-3 py-0.5 text-sm font-semibold ${STATUS_STYLES[reminder.status]}`}
+          className={`rounded-full px-3 py-0.5 text-base font-semibold ${STATUS_STYLES[reminder.status]}`}
         >
           {reminder.status}
         </span>
@@ -164,12 +164,12 @@ export default function RemindersTab({ customers, sentReminders, onMarkSent }) {
                   </div>
                 </div>
                 <span
-                  className={`rounded-full px-3 py-0.5 text-sm font-semibold ${CHANNEL_STYLES[r.channel]}`}
+                  className={`rounded-full px-3 py-0.5 text-base font-semibold ${CHANNEL_STYLES[r.channel]}`}
                 >
                   {r.channel}
                 </span>
                 <span
-                  className={`rounded-full px-3 py-0.5 text-sm font-semibold ${STATUS_STYLES[r.status]}`}
+                  className={`rounded-full px-3 py-0.5 text-base font-semibold ${STATUS_STYLES[r.status]}`}
                 >
                   {r.status}
                 </span>

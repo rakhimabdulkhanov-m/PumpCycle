@@ -8,7 +8,7 @@ export default function Topbar({ onGetThis }) {
         </span>
         <button
           onClick={onGetThis}
-          className="ml-auto rounded-lg bg-blue-700 hover:bg-blue-800 text-white text-lg font-semibold px-5 py-2.5"
+          className="w-full rounded-lg bg-blue-700 hover:bg-blue-800 text-white text-lg font-semibold px-5 py-2.5 sm:ml-auto sm:w-auto"
         >
           Get this for your company
         </button>
