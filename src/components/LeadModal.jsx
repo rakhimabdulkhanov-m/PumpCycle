@@ -3,7 +3,7 @@ export default function LeadModal({ open, onClose }) {
 
   return (
     <div
-      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/40 p-4"
+      className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 p-4"
       onClick={onClose}
     >
       <div
