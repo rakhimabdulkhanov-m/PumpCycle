@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { MapContainer, TileLayer, Marker } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -32,7 +32,7 @@ const ICONS = {
   ok: makeIcon(STATUS_COLORS.ok),
 }
 
-function Legend({ customers }) {
+function Legend({ customers, hiddenOnMobile }) {
   const counts = { overdue: 0, 'due-soon': 0, ok: 0 }
   customers.forEach((c) => counts[dueStatus(c)]++)
   const rows = [
@@ -41,7 +41,12 @@ function Legend({ customers }) {
     ['ok', 'On schedule'],
   ]
   return (
-    <div className="absolute bottom-6 left-3 z-[1000] rounded-lg bg-white/95 px-4 py-3 shadow-md">
+    <div
+      className={
+        'absolute bottom-6 left-3 z-[1000] rounded-lg bg-white/95 px-4 py-3 shadow-md ' +
+        (hiddenOnMobile ? 'hidden sm:block' : '')
+      }
+    >
       {rows.map(([status, label]) => (
         <div key={status} className="flex items-center gap-2 py-0.5">
           <span
@@ -59,30 +64,56 @@ function Legend({ customers }) {
 
 export default function MapTab({ customers, onUpdateCustomer }) {
   const [selectedId, setSelectedId] = useState(null)
+  const mapRef = useRef(null)
+  const wrapperRef = useRef(null)
   const selected = customers.find((c) => c.id === selectedId)
+
+  // Leaflet caches its container size; without invalidateSize after the
+  // wrapper resizes (bottom sheet, iOS toolbar/keyboard, rotation) tiles
+  // stay gray and tap hit-testing lands on the wrong spot.
+  useEffect(() => {
+    const observer = new ResizeObserver(() => mapRef.current?.invalidateSize())
+    observer.observe(wrapperRef.current)
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    mapRef.current?.invalidateSize()
+    const t = setTimeout(() => mapRef.current?.invalidateSize(), 300)
+    return () => clearTimeout(t)
+  }, [selectedId])
 
   return (
     <div className="relative h-full">
-      <MapContainer
-        center={[35.28, -81.17]}
-        zoom={11}
-        className="h-full w-full"
-        scrollWheelZoom
+      <div
+        ref={wrapperRef}
+        className={
+          'absolute inset-x-0 top-0 ' +
+          (selected ? 'bottom-[70%] sm:bottom-0' : 'bottom-0')
+        }
       >
-        <TileLayer
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-        />
-        {customers.map((c) => (
-          <Marker
-            key={c.id}
-            position={[c.lat, c.lng]}
-            icon={ICONS[dueStatus(c)]}
-            eventHandlers={{ click: () => setSelectedId(c.id) }}
+        <MapContainer
+          ref={mapRef}
+          center={[35.28, -81.17]}
+          zoom={11}
+          className="h-full w-full"
+          scrollWheelZoom
+        >
+          <TileLayer
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           />
-        ))}
-      </MapContainer>
-      <Legend customers={customers} />
+          {customers.map((c) => (
+            <Marker
+              key={c.id}
+              position={[c.lat, c.lng]}
+              icon={ICONS[dueStatus(c)]}
+              eventHandlers={{ click: () => setSelectedId(c.id) }}
+            />
+          ))}
+        </MapContainer>
+        <Legend customers={customers} hiddenOnMobile={!!selected} />
+      </div>
       {selected && (
         <CustomerCard
           customer={selected}

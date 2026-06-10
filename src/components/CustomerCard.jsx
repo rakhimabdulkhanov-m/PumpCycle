@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { nextDue, daysUntilDue, dueStatus, formatDate, todayISO } from '../lib/dates.js'
 
 const STATUS_STYLES = {
@@ -35,6 +35,11 @@ const inputCls =
 export default function CustomerCard({ customer, onClose, onUpdate }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(null)
+  const bodyRef = useRef(null)
+
+  useEffect(() => {
+    bodyRef.current.scrollTop = 0
+  }, [editing])
 
   const status = dueStatus(customer)
   const days = daysUntilDue(customer)
@@ -64,7 +69,7 @@ export default function CustomerCard({ customer, onClose, onUpdate }) {
   const set = (key) => (e) => setDraft({ ...draft, [key]: e.target.value })
 
   return (
-    <div className="absolute inset-x-0 bottom-0 z-[1050] flex max-h-[75%] flex-col rounded-t-xl bg-white shadow-2xl sm:inset-x-auto sm:right-4 sm:top-4 sm:bottom-4 sm:max-h-none sm:w-96 sm:rounded-xl">
+    <div className="absolute inset-x-0 bottom-0 z-[1050] flex h-[70%] flex-col rounded-t-xl bg-white shadow-2xl sm:inset-x-auto sm:right-4 sm:top-4 sm:bottom-4 sm:h-auto sm:w-96 sm:rounded-xl">
       <div className="flex items-start justify-between gap-3 border-b border-gray-200 p-5 pb-3">
         <h2 className="text-2xl font-bold text-gray-900">{customer.name}</h2>
         <button
@@ -76,7 +81,7 @@ export default function CustomerCard({ customer, onClose, onUpdate }) {
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-5 pt-2">
+      <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto p-5 pt-2">
       {!editing && (
         <>
           <Row label="Address">{customer.address}</Row>

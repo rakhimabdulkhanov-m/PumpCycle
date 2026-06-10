@@ -3,10 +3,23 @@ function parseISO(s) {
   return new Date(y, m - 1, d)
 }
 
-export function todayISO() {
-  const d = new Date()
+function toISO(d) {
   const pad = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+export function todayISO() {
+  return toISO(new Date())
+}
+
+export function shiftISO(iso, days) {
+  const d = parseISO(iso)
+  d.setDate(d.getDate() + days)
+  return toISO(d)
+}
+
+export function daysBetween(fromISO, toISOStr) {
+  return Math.round((parseISO(toISOStr) - parseISO(fromISO)) / 86400000)
 }
 
 export function nextDue(customer) {

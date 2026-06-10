@@ -113,9 +113,12 @@ export default function RemindersTab({ customers, sentReminders, onMarkSent }) {
     return () => clearTimeout(t)
   }, [toast])
 
+  // Sent reads as history (newest first); Scheduled/All as a queue.
   const reminders = allReminders(customers, sentReminders)
     .filter((r) => filter === 'All' || r.status === filter)
-    .sort((a, b) => a.sendDate - b.sendDate)
+    .sort((a, b) =>
+      filter === 'Sent' ? b.sendDate - a.sendDate : a.sendDate - b.sendDate
+    )
 
   const selected = allReminders(customers, sentReminders).find(
     (r) => r.id === selectedId
