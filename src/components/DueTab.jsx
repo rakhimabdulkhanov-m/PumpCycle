@@ -48,7 +48,7 @@ function PriceSettings({ avgJobPrice, onChange }) {
         Avg job: {money(avgJobPrice)} ✎
       </button>
       {open && (
-        <div className="absolute right-0 z-[1100] mt-2 w-64 rounded-lg border border-gray-200 bg-white p-4 shadow-xl">
+        <div className="absolute left-0 z-[1100] mt-2 w-64 rounded-lg border border-gray-200 bg-white p-4 shadow-xl sm:left-auto sm:right-0">
           <label className="block">
             <span className="text-sm font-medium uppercase tracking-wide text-gray-500">
               Average job price ($)

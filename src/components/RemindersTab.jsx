@@ -52,7 +52,7 @@ function Toast({ message }) {
 function PreviewPanel({ reminder, customer, onSendNow, onClose }) {
   return (
     <div className="absolute inset-x-0 bottom-0 z-[1050] max-h-[75%] overflow-y-auto rounded-t-xl bg-white p-5 shadow-2xl sm:inset-x-auto sm:right-4 sm:top-4 sm:bottom-4 sm:max-h-none sm:w-96 sm:rounded-xl">
-      <div className="flex items-start justify-between gap-3">
+      <div className="sticky top-0 z-10 -mx-5 -mt-5 mb-1 flex items-start justify-between gap-3 bg-white px-5 pt-5 pb-2">
         <h2 className="text-2xl font-bold text-gray-900">{customer.name}</h2>
         <button
           onClick={onClose}

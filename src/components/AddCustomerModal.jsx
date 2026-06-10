@@ -56,7 +56,7 @@ export default function AddCustomerModal({ onAdd, onClose }) {
         className="max-h-full w-full max-w-md overflow-y-auto rounded-xl bg-white p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-start justify-between">
+        <div className="sticky top-0 z-10 -mx-6 -mt-6 mb-1 flex items-start justify-between bg-white px-6 pt-6 pb-2">
           <h2 className="text-2xl font-bold text-gray-900">Add customer</h2>
           <button
             type="button"
