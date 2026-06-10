@@ -53,10 +53,10 @@ export default function AddCustomerModal({ onAdd, onClose }) {
     >
       <form
         onSubmit={submit}
-        className="max-h-full w-full max-w-md overflow-y-auto rounded-xl bg-white p-6 shadow-xl"
+        className="flex max-h-full w-full max-w-md flex-col rounded-xl bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 z-10 -mx-6 -mt-6 mb-1 flex items-start justify-between bg-white px-6 pt-6 pb-2">
+        <div className="flex items-start justify-between border-b border-gray-200 p-6 pb-3">
           <h2 className="text-2xl font-bold text-gray-900">Add customer</h2>
           <button
             type="button"
@@ -68,6 +68,7 @@ export default function AddCustomerModal({ onAdd, onClose }) {
           </button>
         </div>
 
+        <div className="min-h-0 flex-1 overflow-y-auto p-6 pt-2">
         <Field label="Name">
           <input className={inputCls} value={form.name} onChange={set('name')} required />
         </Field>
@@ -120,6 +121,7 @@ export default function AddCustomerModal({ onAdd, onClose }) {
           >
             Cancel
           </button>
+        </div>
         </div>
       </form>
     </div>

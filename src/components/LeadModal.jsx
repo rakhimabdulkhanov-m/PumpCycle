@@ -33,10 +33,10 @@ export default function LeadModal({ open, onClose }) {
       onClick={onClose}
     >
       <div
-        className="max-h-full w-full max-w-md overflow-y-auto rounded-xl bg-white p-6 shadow-xl"
+        className="flex max-h-full w-full max-w-md flex-col rounded-xl bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 z-10 -mx-6 -mt-6 mb-1 flex items-start justify-between bg-white px-6 pt-6 pb-2">
+        <div className="flex items-start justify-between border-b border-gray-200 p-6 pb-3">
           <h2 className="text-2xl font-bold text-gray-900">
             Get this for your company
           </h2>
@@ -49,6 +49,7 @@ export default function LeadModal({ open, onClose }) {
           </button>
         </div>
 
+        <div className="min-h-0 flex-1 overflow-y-auto p-6 pt-2">
         {status === 'done' ? (
           <p className="mt-4 text-lg text-gray-700">
             Thanks — got it! I'll get back to you within a day.
@@ -115,6 +116,7 @@ export default function LeadModal({ open, onClose }) {
             </p>
           </form>
         )}
+        </div>
       </div>
     </div>
   )
