@@ -76,6 +76,7 @@ function PriceSettings({ avgJobPrice, onChange }) {
 export default function DueTab({
   customers,
   settings,
+  sentReminders,
   onUpdateCustomer,
   onAddCustomer,
   onSetAvgJobPrice,
@@ -113,7 +114,7 @@ export default function DueTab({
             />
             <Counter
               label="Reminders scheduled"
-              value={scheduledCount(customers)}
+              value={scheduledCount(customers, sentReminders)}
               className="bg-blue-100 text-blue-900"
             />
             <div className="ml-auto flex flex-col items-end gap-2">

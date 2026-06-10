@@ -4,16 +4,8 @@ import TabNav from './components/TabNav.jsx'
 import LeadModal from './components/LeadModal.jsx'
 import MapTab from './components/MapTab.jsx'
 import DueTab from './components/DueTab.jsx'
+import RemindersTab from './components/RemindersTab.jsx'
 import { loadState, saveState } from './lib/storage.js'
-
-function Placeholder({ title }) {
-  return (
-    <div className="p-8 text-center">
-      <h2 className="text-2xl font-bold text-gray-900">{title}</h2>
-      <p className="mt-2 text-lg text-gray-500">Coming soon.</p>
-    </div>
-  )
-}
 
 function App() {
   const [tab, setTab] = useState('map')
@@ -43,6 +35,11 @@ function App() {
     persist({ ...data, settings: { ...data.settings, avgJobPrice: price } })
   }
 
+  function markReminderSent(reminderId) {
+    if (data.sentReminders.includes(reminderId)) return
+    persist({ ...data, sentReminders: [...data.sentReminders, reminderId] })
+  }
+
   return (
     <div className="flex h-dvh flex-col bg-gray-50 text-gray-900">
       <Topbar onGetThis={() => setModalOpen(true)} />
@@ -55,12 +52,19 @@ function App() {
           <DueTab
             customers={data.customers}
             settings={data.settings}
+            sentReminders={data.sentReminders}
             onUpdateCustomer={updateCustomer}
             onAddCustomer={addCustomer}
             onSetAvgJobPrice={setAvgJobPrice}
           />
         )}
-        {tab === 'reminders' && <Placeholder title="Reminders" />}
+        {tab === 'reminders' && (
+          <RemindersTab
+            customers={data.customers}
+            sentReminders={data.sentReminders}
+            onMarkSent={markReminderSent}
+          />
+        )}
       </main>
       <LeadModal open={modalOpen} onClose={() => setModalOpen(false)} />
     </div>

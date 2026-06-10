@@ -12,12 +12,17 @@ export function loadState() {
       return {
         customers: stored.customers || seed.customers,
         settings: { ...DEFAULT_SETTINGS, ...stored.settings },
+        sentReminders: stored.sentReminders || [],
       }
     }
   } catch {
     // corrupted storage — fall back to seed
   }
-  return { customers: seed.customers, settings: { ...DEFAULT_SETTINGS } }
+  return {
+    customers: seed.customers,
+    settings: { ...DEFAULT_SETTINGS },
+    sentReminders: [],
+  }
 }
 
 export function saveState(state) {
