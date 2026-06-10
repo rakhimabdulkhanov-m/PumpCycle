@@ -3,6 +3,7 @@ import Topbar from './components/Topbar.jsx'
 import TabNav from './components/TabNav.jsx'
 import LeadModal from './components/LeadModal.jsx'
 import MapTab from './components/MapTab.jsx'
+import DueTab from './components/DueTab.jsx'
 import { loadState, saveState } from './lib/storage.js'
 
 function Placeholder({ title }) {
@@ -17,12 +18,29 @@ function Placeholder({ title }) {
 function App() {
   const [tab, setTab] = useState('map')
   const [modalOpen, setModalOpen] = useState(false)
-  const [customers, setCustomers] = useState(() => loadState().customers)
+  const [data, setData] = useState(loadState)
+
+  function persist(next) {
+    setData(next)
+    saveState(next)
+  }
 
   function updateCustomer(id, patch) {
-    const next = customers.map((c) => (c.id === id ? { ...c, ...patch } : c))
-    setCustomers(next)
-    saveState({ customers: next })
+    persist({
+      ...data,
+      customers: data.customers.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+    })
+  }
+
+  function addCustomer(fields) {
+    persist({
+      ...data,
+      customers: [...data.customers, { ...fields, id: `c-${Date.now()}` }],
+    })
+  }
+
+  function setAvgJobPrice(price) {
+    persist({ ...data, settings: { ...data.settings, avgJobPrice: price } })
   }
 
   return (
@@ -31,9 +49,17 @@ function App() {
       <TabNav active={tab} onChange={setTab} />
       <main className="min-h-0 flex-1 overflow-auto">
         {tab === 'map' && (
-          <MapTab customers={customers} onUpdateCustomer={updateCustomer} />
+          <MapTab customers={data.customers} onUpdateCustomer={updateCustomer} />
         )}
-        {tab === 'due' && <Placeholder title="Due list" />}
+        {tab === 'due' && (
+          <DueTab
+            customers={data.customers}
+            settings={data.settings}
+            onUpdateCustomer={updateCustomer}
+            onAddCustomer={addCustomer}
+            onSetAvgJobPrice={setAvgJobPrice}
+          />
+        )}
         {tab === 'reminders' && <Placeholder title="Reminders" />}
       </main>
       <LeadModal open={modalOpen} onClose={() => setModalOpen(false)} />
