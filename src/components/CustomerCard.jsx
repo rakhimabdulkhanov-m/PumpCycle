@@ -69,7 +69,7 @@ export default function CustomerCard({ customer, onClose, onUpdate }) {
   const set = (key) => (e) => setDraft({ ...draft, [key]: e.target.value })
 
   return (
-    <div className="absolute inset-x-0 bottom-0 z-[1050] flex h-[70%] flex-col rounded-t-xl bg-white shadow-2xl sm:inset-x-auto sm:right-4 sm:top-4 sm:bottom-4 sm:h-auto sm:w-96 sm:rounded-xl">
+    <div className="absolute inset-x-0 bottom-0 z-[1050] flex h-[min(75dvh,calc(100%-6rem))] flex-col rounded-t-xl bg-white shadow-2xl sm:inset-x-auto sm:right-4 sm:top-4 sm:bottom-4 sm:h-auto sm:w-96 sm:rounded-xl">
       <div className="flex items-start justify-between gap-3 border-b border-gray-200 p-5 pb-3">
         <h2 className="text-2xl font-bold text-gray-900">{customer.name}</h2>
         <button

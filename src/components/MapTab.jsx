@@ -89,7 +89,7 @@ export default function MapTab({ customers, onUpdateCustomer }) {
         ref={wrapperRef}
         className={
           'absolute inset-x-0 top-0 ' +
-          (selected ? 'bottom-[70%] sm:bottom-0' : 'bottom-0')
+          (selected ? 'bottom-[min(75dvh,calc(100%-6rem))] sm:bottom-0' : 'bottom-0')
         }
       >
         <MapContainer
