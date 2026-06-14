@@ -7,7 +7,7 @@ with fictional seed data ("Hawkins Septic Co"). No real users, no real sending.
 ## Stack (fixed — never add libraries without asking me)
 - Vite + React, plain JavaScript (no TypeScript)
 - Tailwind CSS
-- react-leaflet + OpenStreetMap tiles (free, no API keys)
+- react-leaflet + OpenStreetMap + Esri World Imagery (satellite) tiles, both free / no API key
 - State: React state + localStorage (key "pumpcycle-demo-v1"), seeded from src/data/seed.json
 - Deploy: Cloudflare Pages via wrangler. One Pages Function: POST /api/lead → Telegram bot (token/chat_id from env vars, never hardcoded)
 - No other backend, no database, no auth, no router
