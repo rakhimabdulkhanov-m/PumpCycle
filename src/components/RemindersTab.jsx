@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { nextDue, formatDate } from '../lib/dates.js'
+import { nextDue, formatDate, isCommercial } from '../lib/dates.js'
 import { allReminders } from '../lib/reminders.js'
 
 const COMPANY_PHONE = '(704) 922-0440'
@@ -14,6 +14,7 @@ const CHANNEL_STYLES = {
 const STATUS_STYLES = {
   Scheduled: 'bg-blue-100 text-blue-800',
   Sent: 'bg-gray-200 text-gray-600',
+  Ready: 'bg-sky-100 text-sky-800',
 }
 
 function firstName(name) {
@@ -22,21 +23,44 @@ function firstName(name) {
 
 function messageText(reminder, customer) {
   const due = formatDate(nextDue(customer))
+  const commercial = isCommercial(customer)
+
   if (reminder.channel === 'SMS') {
+    if (commercial) {
+      return (
+        `Hawkins Septic: ${customer.name} grease trap is due for its 90-day ` +
+        `pump-out by ${due} to stay compliant. Call or text ${COMPANY_PHONE} ` +
+        `to schedule. Reply STOP to opt out.`
+      )
+    }
     return (
       `Hawkins Septic: Hi ${firstName(customer.name)}, your septic tank is due ` +
       `for pumping around ${due}. Call or text ${COMPANY_PHONE} to get on the ` +
       `schedule. Reply STOP to opt out.`
     )
   }
+
+  if (commercial) {
+    return (
+      `Subject: Your 90-day grease trap pump-out is due\n\n` +
+      `Hi ${firstName(customer.name)},\n\n` +
+      `${customer.name} is on the 90-day municipal grease-trap cycle, and your ` +
+      `next pump-out is due around ${due} — about 15 days out. Staying on this ` +
+      `schedule keeps your trap compliant and avoids fines from a missed FOG ` +
+      `service.\n\n` +
+      `We leave the signed trip ticket / manifest with you at the service so you ` +
+      `have it on hand for the inspector. Reply to this email or call us at ` +
+      `${COMPANY_PHONE} and we'll get you on the schedule.\n\n` +
+      `— Mike Hawkins, Hawkins Septic Co`
+    )
+  }
+
   return (
-    `Subject: Your septic pumping is coming due — Hawkins Septic Co\n\n` +
+    `Subject: Your septic tank is due for pumping soon\n\n` +
     `Hi ${firstName(customer.name)},\n\n` +
-    `Our records show the septic tank at ${customer.address} is due for ` +
-    `pumping around ${due}. Regular pumping keeps your system healthy and ` +
-    `avoids expensive backups.\n\n` +
-    `Reply to this email or call us at ${COMPANY_PHONE} and we'll find a ` +
-    `time that works.\n\n` +
+    `The septic tank at ${customer.address} is coming up on its pump-out date ` +
+    `around ${due}. Call or text us at ${COMPANY_PHONE} and we'll get you on ` +
+    `the schedule.\n\n` +
     `— Mike Hawkins, Hawkins Septic Co`
   )
 }
@@ -49,7 +73,13 @@ function Toast({ message }) {
   )
 }
 
-function PreviewPanel({ reminder, customer, onSendNow, onClose }) {
+function PreviewPanel({ reminder, customer, onSendNow, onCopy, onClose }) {
+  const message = messageText(reminder, customer)
+  const isSms = reminder.channel === 'SMS'
+  const isTouch = window.matchMedia('(pointer: coarse)').matches
+  const smsHref = `sms:${customer.phone.replace(/\D/g, '')}?&body=${encodeURIComponent(
+    message
+  )}`
   return (
     <div className="absolute inset-x-0 bottom-0 z-[1050] flex max-h-[75%] flex-col rounded-t-xl bg-white shadow-2xl sm:inset-x-auto sm:right-4 sm:top-4 sm:bottom-4 sm:max-h-none sm:w-96 sm:rounded-xl">
       <div className="flex items-start justify-between gap-3 border-b border-gray-200 p-5 pb-3">
@@ -85,17 +115,40 @@ function PreviewPanel({ reminder, customer, onSendNow, onClose }) {
           Message preview
         </div>
         <p className="mt-2 whitespace-pre-line text-lg text-gray-800">
-          {messageText(reminder, customer)}
+          {message}
         </p>
       </div>
 
-      {reminder.status === 'Scheduled' && (
-        <button
-          onClick={onSendNow}
-          className="mt-4 w-full rounded-lg bg-blue-700 px-4 py-3 text-lg font-semibold text-white hover:bg-blue-800"
-        >
-          Send now
-        </button>
+      {isSms ? (
+        <div className="mt-4 flex flex-col gap-2">
+          {isTouch && (
+            <a
+              href={smsHref}
+              className="w-full rounded-lg bg-blue-700 px-4 py-3 text-center text-lg font-semibold text-white hover:bg-blue-800"
+            >
+              Text from my phone
+            </a>
+          )}
+          <button
+            onClick={() => onCopy(message)}
+            className="w-full rounded-lg border-2 border-gray-300 px-4 py-3 text-lg font-semibold text-gray-700 hover:bg-gray-100"
+          >
+            Copy text
+          </button>
+          <p className="text-sm text-gray-500">
+            One tap sends from your phone — or fully automatic once your number
+            is registered.
+          </p>
+        </div>
+      ) : (
+        reminder.status === 'Scheduled' && (
+          <button
+            onClick={onSendNow}
+            className="mt-4 w-full rounded-lg bg-blue-700 px-4 py-3 text-lg font-semibold text-white hover:bg-blue-800"
+          >
+            Send now
+          </button>
+        )
       )}
       </div>
     </div>
@@ -113,9 +166,16 @@ export default function RemindersTab({ customers, sentReminders, onMarkSent }) {
     return () => clearTimeout(t)
   }, [toast])
 
-  // Sent reads as history (newest first); Scheduled/All as a queue.
+  // Sent reads as history (newest first); Scheduled/All as a queue. The
+  // "Scheduled" filter means "not yet Sent", so Ready SMS show there too.
   const reminders = allReminders(customers, sentReminders)
-    .filter((r) => filter === 'All' || r.status === filter)
+    .filter((r) =>
+      filter === 'All'
+        ? true
+        : filter === 'Sent'
+          ? r.status === 'Sent'
+          : r.status !== 'Sent'
+    )
     .sort((a, b) =>
       filter === 'Sent' ? b.sendDate - a.sendDate : a.sendDate - b.sendDate
     )
@@ -130,6 +190,11 @@ export default function RemindersTab({ customers, sentReminders, onMarkSent }) {
     onMarkSent(reminder.id)
     setToast(`${reminder.channel} sent to ${customer.name} (simulated)`)
     setSelectedId(null)
+  }
+
+  function copyMessage(message) {
+    navigator.clipboard.writeText(message)
+    setToast('Message copied')
   }
 
   return (
@@ -167,6 +232,11 @@ export default function RemindersTab({ customers, sentReminders, onMarkSent }) {
                   <div className="text-base text-gray-500">
                     Send {formatDate(r.sendDate)}
                   </div>
+                  {r.channel === 'SMS' && (
+                    <div className="text-sm text-gray-400">
+                      Send from your phone
+                    </div>
+                  )}
                 </div>
                 <span
                   className={`rounded-full px-3 py-0.5 text-base font-semibold ${CHANNEL_STYLES[r.channel]}`}
@@ -194,6 +264,7 @@ export default function RemindersTab({ customers, sentReminders, onMarkSent }) {
           reminder={selected}
           customer={selectedCustomer}
           onSendNow={() => sendNow(selected, selectedCustomer)}
+          onCopy={copyMessage}
           onClose={() => setSelectedId(null)}
         />
       )}

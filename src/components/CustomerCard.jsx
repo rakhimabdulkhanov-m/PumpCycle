@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { nextDue, daysUntilDue, dueStatus, formatDate, todayISO } from '../lib/dates.js'
+import { nextDue, daysUntilDue, dueStatus, formatDate, todayISO, isCommercial } from '../lib/dates.js'
 
 const STATUS_STYLES = {
   overdue: 'bg-red-100 text-red-800',
@@ -42,6 +42,7 @@ export default function CustomerCard({ customer, onClose, onUpdate }) {
   }, [editing])
 
   const status = dueStatus(customer)
+  const commercial = isCommercial(customer)
   const days = daysUntilDue(customer)
   const dueLabel =
     status === 'overdue'
@@ -71,7 +72,14 @@ export default function CustomerCard({ customer, onClose, onUpdate }) {
   return (
     <div className="absolute inset-x-0 bottom-0 z-[1050] flex h-[min(75dvh,calc(100%-6rem))] flex-col rounded-t-xl bg-white shadow-2xl sm:inset-x-auto sm:right-4 sm:top-4 sm:bottom-4 sm:h-auto sm:w-96 sm:rounded-xl">
       <div className="flex items-start justify-between gap-3 border-b border-gray-200 p-5 pb-3">
-        <h2 className="text-2xl font-bold text-gray-900">{customer.name}</h2>
+        <div className="min-w-0">
+          <h2 className="text-2xl font-bold text-gray-900">{customer.name}</h2>
+          {commercial && (
+            <span className="mt-1 inline-block rounded bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
+              Commercial · Grease trap
+            </span>
+          )}
+        </div>
         <button
           onClick={onClose}
           aria-label="Close"
@@ -92,7 +100,11 @@ export default function CustomerCard({ customer, onClose, onUpdate }) {
           </Row>
           <Row label="Tank size">{customer.tankSizeGal.toLocaleString()} gal</Row>
           <Row label="Last pumped">{formatDate(customer.lastPumped)}</Row>
-          <Row label="Cycle">Every {customer.cycleMonths} months</Row>
+          <Row label="Cycle">
+            {commercial
+              ? 'Every 90 days (grease trap / FOG)'
+              : `Every ${customer.cycleMonths} months`}
+          </Row>
           <Row label="Next due">
             <span
               className={`inline-block rounded-full px-3 py-0.5 font-semibold ${STATUS_STYLES[status]}`}

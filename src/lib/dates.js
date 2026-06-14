@@ -22,6 +22,12 @@ export function daysBetween(fromISO, toISOStr) {
   return Math.round((parseISO(toISOStr) - parseISO(fromISO)) / 86400000)
 }
 
+// Commercial (grease-trap) accounts run a tight cycle; residential run 36 months.
+// There is no `type` field — commercial-ness is derived solely from the cycle.
+export function isCommercial(customer) {
+  return customer.cycleMonths <= 3
+}
+
 export function nextDue(customer) {
   const d = parseISO(customer.lastPumped)
   d.setMonth(d.getMonth() + customer.cycleMonths)
