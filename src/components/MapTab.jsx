@@ -43,7 +43,7 @@ function Legend({ customers, hiddenOnMobile }) {
   return (
     <div
       className={
-        'absolute bottom-6 left-3 z-[1000] rounded-lg bg-white/90 px-3 py-2 shadow-md ' +
+        'absolute bottom-6 left-3 z-[1000] rounded-lg bg-white px-3 py-2 shadow-md ' +
         (hiddenOnMobile ? 'hidden sm:block' : '')
       }
     >
@@ -53,7 +53,7 @@ function Legend({ customers, hiddenOnMobile }) {
             className="inline-block h-4 w-4 rounded-full border-2 border-white shadow"
             style={{ backgroundColor: STATUS_COLORS[status] }}
           />
-          <span className="text-base font-medium text-gray-800">
+          <span className="text-base font-semibold text-gray-900">
             {label} ({counts[status]})
           </span>
         </div>
