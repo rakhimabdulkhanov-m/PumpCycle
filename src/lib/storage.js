@@ -1,7 +1,7 @@
 import seed from '../data/seed.json'
 import { todayISO, shiftISO, daysBetween } from './dates.js'
 
-const KEY = 'pumpcycle-demo-v1'
+const KEY = 'pumpcycle-demo-v2'
 
 // Seed dates were authored relative to this day. On every load all
 // lastPumped dates are shifted forward by the days elapsed since the

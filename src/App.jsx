@@ -46,7 +46,11 @@ function App() {
       <TabNav active={tab} onChange={setTab} />
       <main className="min-h-0 flex-1 overflow-auto">
         {tab === 'map' && (
-          <MapTab customers={data.customers} onUpdateCustomer={updateCustomer} />
+          <MapTab
+            customers={data.customers}
+            onUpdateCustomer={updateCustomer}
+            onAddCustomer={addCustomer}
+          />
         )}
         {tab === 'due' && (
           <DueTab
