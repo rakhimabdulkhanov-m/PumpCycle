@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { nextDue, formatDate, isCommercial } from '../lib/dates.js'
+import { nextDue, daysUntilDue, formatDate, isCommercial } from '../lib/dates.js'
 import { allReminders } from '../lib/reminders.js'
 
 const COMPANY_PHONE = '(704) 922-0440'
@@ -24,11 +24,14 @@ function firstName(name) {
 function messageText(reminder, customer) {
   const due = formatDate(nextDue(customer))
   const commercial = isCommercial(customer)
+  const days = daysUntilDue(customer)
+  const cycleDays = customer.cycleMonths * 30
+  const timing = days < 0 ? `${-days} days overdue` : `in ${days} days`
 
   if (reminder.channel === 'SMS') {
     if (commercial) {
       return (
-        `Hawkins Septic: ${customer.name} grease trap is due for its 90-day ` +
+        `Hawkins Septic: ${customer.name} grease trap is due for its ${cycleDays}-day ` +
         `pump-out by ${due} to stay compliant. Call or text ${COMPANY_PHONE} ` +
         `to schedule. Reply STOP to opt out.`
       )
@@ -42,10 +45,10 @@ function messageText(reminder, customer) {
 
   if (commercial) {
     return (
-      `Subject: Your 90-day grease trap pump-out is due\n\n` +
+      `Subject: Your ${cycleDays}-day grease trap pump-out is due\n\n` +
       `Hi ${firstName(customer.name)},\n\n` +
-      `${customer.name} is on the 90-day municipal grease-trap cycle, and your ` +
-      `next pump-out is due around ${due} — about 15 days out. Staying on this ` +
+      `${customer.name} is on the ${cycleDays}-day municipal grease-trap cycle, and your ` +
+      `next pump-out is due around ${due} — ${timing}. Staying on this ` +
       `schedule keeps your trap compliant and avoids fines from a missed FOG ` +
       `service.\n\n` +
       `We leave the signed trip ticket / manifest with you at the service so you ` +
@@ -55,10 +58,11 @@ function messageText(reminder, customer) {
     )
   }
 
+  const at = customer.address.trim() ? ` at ${customer.address}` : ''
   return (
     `Subject: Your septic tank is due for pumping soon\n\n` +
     `Hi ${firstName(customer.name)},\n\n` +
-    `The septic tank at ${customer.address} is coming up on its pump-out date ` +
+    `The septic tank${at} is coming up on its pump-out date ` +
     `around ${due}. Call or text us at ${COMPANY_PHONE} and we'll get you on ` +
     `the schedule.\n\n` +
     `— Mike Hawkins, Hawkins Septic Co`
@@ -106,8 +110,11 @@ function PreviewPanel({ reminder, customer, onSendNow, onCopy, onClose }) {
           {reminder.status}
         </span>
         <span className="text-base text-gray-600">
-          {reminder.status === 'Sent' ? 'Sent' : 'Send date'}:{' '}
-          {formatDate(reminder.sentDate || reminder.sendDate)}
+          {reminder.dueNow
+            ? 'Due now'
+            : `${reminder.status === 'Sent' ? 'Sent' : 'Send date'}: ${formatDate(
+                reminder.sentDate || reminder.sendDate
+              )}`}
         </span>
       </div>
 
@@ -122,7 +129,7 @@ function PreviewPanel({ reminder, customer, onSendNow, onCopy, onClose }) {
 
       {isSms ? (
         <div className="mt-4 flex flex-col gap-2">
-          {isTouch && (
+          {isTouch && customer.phone.trim() !== '' && (
             <a
               href={smsHref}
               className="w-full rounded-lg bg-blue-700 px-4 py-3 text-center text-lg font-semibold text-white hover:bg-blue-800"
@@ -244,8 +251,11 @@ export default function RemindersTab({ customers, sentReminders, sentAt, onMarkS
                     {r.customerName}
                   </div>
                   <div className="text-base text-gray-500">
-                    {r.status === 'Sent' ? 'Sent' : 'Send'}{' '}
-                    {formatDate(r.sentDate || r.sendDate)}
+                    {r.status === 'Sent'
+                      ? `Sent ${formatDate(r.sentDate || r.sendDate)}`
+                      : r.dueNow
+                        ? 'Send now'
+                        : `Send ${formatDate(r.sendDate)}`}
                   </div>
                   {r.channel === 'SMS' && (
                     <div className="text-sm text-gray-400">

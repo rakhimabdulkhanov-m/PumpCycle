@@ -20,12 +20,16 @@ export function remindersFor(customer, sentIds = [], sentAt = {}) {
         : sendDate < today || sentIds.includes(id)
           ? 'Sent'
           : 'Scheduled'
+    // A Ready SMS whose send date has already passed is due right now — the UI
+    // surfaces it as "Send now" instead of a stale past date (still not auto-sent).
+    const dueNow = status === 'Ready' && sendDate < today
     return {
       id,
       customerId: customer.id,
       customerName: customer.name,
       channel,
       sendDate,
+      dueNow,
       // Actual send moment for items flipped to Sent via the UI (ISO string),
       // else null — display falls back to the scheduled sendDate.
       sentDate: sentAt[id] || null,

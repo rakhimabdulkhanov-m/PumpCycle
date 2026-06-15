@@ -94,15 +94,19 @@ export default function CustomerCard({ customer, onClose, onUpdate }) {
         <>
           <Row label="Address">{customer.address}</Row>
           <Row label="Phone">
-            <a href={`tel:${customer.phone}`} className="text-blue-700 underline">
-              {customer.phone}
-            </a>
+            {customer.phone ? (
+              <a href={`tel:${customer.phone}`} className="text-blue-700 underline">
+                {customer.phone}
+              </a>
+            ) : (
+              <span className="text-gray-400">—</span>
+            )}
           </Row>
           <Row label="Tank size">{customer.tankSizeGal.toLocaleString()} gal</Row>
           <Row label="Last pumped">{formatDate(customer.lastPumped)}</Row>
           <Row label="Cycle">
             {commercial
-              ? 'Every 90 days (grease trap / FOG)'
+              ? `Every ${customer.cycleMonths * 30} days (grease trap / FOG)`
               : `Every ${customer.cycleMonths} months`}
           </Row>
           <Row label="Next due">

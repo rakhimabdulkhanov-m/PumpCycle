@@ -19,9 +19,20 @@ function App() {
   }
 
   function updateCustomer(id, patch) {
+    // A new lastPumped means a new cycle: drop this customer's old reminder
+    // flags so their reminders regenerate fresh as Scheduled/Ready.
+    const prev = data.customers.find((c) => c.id === id)
+    const cycleReset = prev && patch.lastPumped && patch.lastPumped !== prev.lastPumped
+    const keep = (k) => !k.startsWith(`${id}:`)
     persist({
       ...data,
       customers: data.customers.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+      sentReminders: cycleReset
+        ? data.sentReminders.filter(keep)
+        : data.sentReminders,
+      sentAt: cycleReset
+        ? Object.fromEntries(Object.entries(data.sentAt).filter(([k]) => keep(k)))
+        : data.sentAt,
     })
   }
 
