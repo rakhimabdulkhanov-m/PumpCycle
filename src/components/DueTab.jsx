@@ -83,6 +83,7 @@ export default function DueTab({
   onSetAvgJobPrice,
 }) {
   const [filter, setFilter] = useState('all')
+  const [searchQuery, setSearchQuery] = useState('')
   const [selectedId, setSelectedId] = useState(null)
   const [adding, setAdding] = useState(false)
 
@@ -94,8 +95,15 @@ export default function DueTab({
     return d >= 0 && d <= 30
   })
 
+  const q = searchQuery.trim().toLowerCase()
   const rows = customers
     .filter((c) => matchesFilter(filter, daysUntilDue(c)))
+    .filter(
+      (c) =>
+        q === '' ||
+        c.name.toLowerCase().includes(q) ||
+        c.address.toLowerCase().includes(q)
+    )
     .sort((a, b) => nextDue(a) - nextDue(b))
 
   return (
@@ -132,7 +140,15 @@ export default function DueTab({
             </div>
           </div>
 
-          <div className="mt-5 flex flex-wrap gap-2">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search name or address"
+            className="mt-5 w-full rounded-lg border border-gray-300 px-3 py-2 text-base focus:border-blue-600 focus:outline-none"
+          />
+
+          <div className="mt-4 flex flex-wrap gap-2">
             {FILTERS.map((f) => (
               <button
                 key={f.id}
@@ -183,7 +199,7 @@ export default function DueTab({
             })}
             {rows.length === 0 && (
               <div className="px-4 py-8 text-center text-lg text-gray-500">
-                No customers match this filter.
+                No customers match
               </div>
             )}
           </div>
