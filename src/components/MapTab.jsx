@@ -206,7 +206,7 @@ export default function MapTab({ customers, onUpdateCustomer, onAddCustomer }) {
             />
           )}
         </MapContainer>
-        <Legend customers={customers} hiddenOnMobile={sheetOpen} />
+        {!(placingPin && isTouch) && <Legend customers={customers} hiddenOnMobile={sheetOpen} />}
         {mobileLocate ? (
           <div className="absolute top-3 left-1/2 z-[1100] -translate-x-1/2 rounded-full bg-gray-900 px-4 py-2 text-center text-sm font-semibold text-white shadow-lg">
             Drag the pin onto the lid
