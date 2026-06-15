@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { nextDue, daysUntilDue, formatDate, isCommercial } from '../lib/dates.js'
-import { allReminders } from '../lib/reminders.js'
+import { nextReminders, sentHistory } from '../lib/reminders.js'
 
 const COMPANY_PHONE = '(704) 922-0440'
 
@@ -187,23 +187,20 @@ export default function RemindersTab({ customers, sentReminders, sentAt, onMarkS
     return () => clearTimeout(t)
   }, [toast])
 
-  // Sent reads as history (newest first); Scheduled/All as a queue. The
-  // "Scheduled" filter means "not yet Sent", so Ready SMS show there too.
-  const reminders = allReminders(customers, sentReminders, sentAt)
-    .filter((r) =>
-      filter === 'All'
-        ? true
-        : filter === 'Sent'
-          ? r.status === 'Sent'
-          : r.status !== 'Sent'
-    )
-    .sort((a, b) =>
-      filter === 'Sent' ? b.sendDate - a.sendDate : a.sendDate - b.sendDate
-    )
-
-  const selected = allReminders(customers, sentReminders, sentAt).find(
-    (r) => r.id === selectedId
+  // Scheduled = one next-actionable reminder per customer (due-now items, dated
+  // today/in-window, sort to the top; Upcoming below). Sent = manual-send history,
+  // newest first. All = both.
+  const scheduled = nextReminders(customers, sentReminders, sentAt).sort(
+    (a, b) => a.sendDate - b.sendDate
   )
+  const sent = sentHistory(customers, sentReminders, sentAt).sort(
+    (a, b) =>
+      new Date(b.sentDate || b.sendDate) - new Date(a.sentDate || a.sendDate)
+  )
+  const reminders =
+    filter === 'Sent' ? sent : filter === 'All' ? [...scheduled, ...sent] : scheduled
+
+  const selected = [...scheduled, ...sent].find((r) => r.id === selectedId)
   const selectedCustomer =
     selected && customers.find((c) => c.id === selected.customerId)
 
