@@ -19,10 +19,15 @@ function App() {
   }
 
   function updateCustomer(id, patch) {
-    // A new lastPumped means a new cycle: drop this customer's old reminder
-    // flags so their reminders regenerate fresh as Scheduled/Ready.
     const prev = data.customers.find((c) => c.id === id)
-    const cycleReset = prev && patch.lastPumped && patch.lastPumped !== prev.lastPumped
+    // A new lastPumped OR a changed cycle length means a new/different cycle:
+    // the cycle also flips the email reminder id (commercial :15 vs residential
+    // :60), so clear on either to avoid stranded sent ids / reverted statuses.
+    const lastPumpedChanged =
+      patch.lastPumped !== undefined && patch.lastPumped !== prev?.lastPumped
+    const cycleChanged =
+      patch.cycleMonths !== undefined && patch.cycleMonths !== prev?.cycleMonths
+    const cycleReset = prev && (lastPumpedChanged || cycleChanged)
     const keep = (k) => !k.startsWith(`${id}:`)
     persist({
       ...data,

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { nextDue, daysUntilDue, formatDate, isCommercial } from '../lib/dates.js'
-import { nextReminders, sentHistory } from '../lib/reminders.js'
+import { scheduledReminders, sentHistory } from '../lib/reminders.js'
 
 const COMPANY_PHONE = '(704) 922-0440'
 
@@ -187,10 +187,11 @@ export default function RemindersTab({ customers, sentReminders, sentAt, onMarkS
     return () => clearTimeout(t)
   }, [toast])
 
-  // Scheduled = one next-actionable reminder per customer (due-now items, dated
-  // today/in-window, sort to the top; Upcoming below). Sent = manual-send history,
-  // newest first. All = both.
-  const scheduled = nextReminders(customers, sentReminders, sentAt).sort(
+  // Scheduled = every still-relevant reminder (email + SMS as separate rows), with
+  // overdue customers and already-sent items excluded. Due-now items have past send
+  // dates so the ascending sort floats them to the top; Upcoming follow. Sent =
+  // manual-send history, newest first. All = both.
+  const scheduled = scheduledReminders(customers, sentReminders, sentAt).sort(
     (a, b) => a.sendDate - b.sendDate
   )
   const sent = sentHistory(customers, sentReminders, sentAt).sort(

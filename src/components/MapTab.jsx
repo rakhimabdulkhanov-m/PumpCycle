@@ -125,6 +125,7 @@ export default function MapTab({ customers, onUpdateCustomer, onAddCustomer }) {
       name: draftName,
       address: draftAddress,
       phone: '',
+      email: '',
       lat: draftPin.lat,
       lng: draftPin.lng,
       tankSizeGal: 1000,

@@ -181,7 +181,7 @@ export default function DueTab({
                       {c.name}
                     </div>
                     <div className="truncate text-base text-gray-500">
-                      {c.address} • {c.phone}
+                      {[c.address, c.phone].filter(Boolean).join(' • ')}
                     </div>
                   </div>
                   <div className="text-right">

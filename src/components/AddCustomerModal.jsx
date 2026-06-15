@@ -28,6 +28,7 @@ export default function AddCustomerModal({ onAdd, onClose }) {
     name: '',
     address: '',
     phone: '',
+    email: '',
     tankSizeGal: '1000',
     lastPumped: todayISO(),
     cycleMonths: '36',
@@ -77,6 +78,9 @@ export default function AddCustomerModal({ onAdd, onClose }) {
         </Field>
         <Field label="Phone">
           <input className={inputCls} value={form.phone} onChange={set('phone')} />
+        </Field>
+        <Field label="Email">
+          <input type="email" className={inputCls} value={form.email} onChange={set('email')} />
         </Field>
         <Field label="Tank size (gal)">
           <select className={inputCls} value={form.tankSizeGal} onChange={set('tankSizeGal')}>

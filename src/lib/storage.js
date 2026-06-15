@@ -1,7 +1,7 @@
 import seed from '../data/seed.json'
 import { todayISO, shiftISO, daysBetween } from './dates.js'
 
-const KEY = 'pumpcycle-demo-v3'
+const KEY = 'pumpcycle-demo-v4'
 
 // Seed dates were authored relative to this day. On every load all
 // lastPumped dates are shifted forward by the days elapsed since the
@@ -10,11 +10,13 @@ const SEED_BASE = '2026-06-10'
 
 const DEFAULT_SETTINGS = { avgJobPrice: 450 }
 
+// Shifts dates forward and defensively normalizes the email field so any older
+// stored shape (pre-email) reads as an empty string rather than undefined.
 function shiftCustomers(customers, days) {
-  if (!days) return customers
   return customers.map((c) => ({
     ...c,
-    lastPumped: shiftISO(c.lastPumped, days),
+    email: c.email || '',
+    lastPumped: days ? shiftISO(c.lastPumped, days) : c.lastPumped,
   }))
 }
 

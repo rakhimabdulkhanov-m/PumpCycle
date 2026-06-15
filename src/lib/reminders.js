@@ -6,12 +6,13 @@ function startOfToday() {
   return today
 }
 
-// Each customer gets two reminders. Email lead time depends on the account:
-// residential 60 days before due, commercial 15 days (day 75 of a 90-day cycle).
-// SMS is 14 days before for everyone. Status is driven ONLY by manual sends:
-// an id in sentIds is "Sent" (with its real sent date from sentAt). A past send
-// date does NOT auto-send or auto-expire — picking the next actionable one is the
-// job of nextReminder() below.
+// A customer gets a reminder per channel they actually have a contact for:
+// an Email reminder only if they have an email, an SMS reminder only if they
+// have a phone. Email lead time depends on the account: residential 60 days
+// before due, commercial 15 days (day 75 of a 90-day cycle). SMS is 14 days
+// before for everyone. Status is driven ONLY by manual sends: an id in sentIds
+// is "Sent" (with its real sent date from sentAt). A past send date does NOT
+// auto-send or auto-expire — picking the still-relevant ones is scheduledReminders().
 export function remindersFor(customer, sentIds = [], sentAt = {}) {
   const make = (daysBefore, channel) => {
     const sendDate = nextDue(customer)
@@ -30,43 +31,34 @@ export function remindersFor(customer, sentIds = [], sentAt = {}) {
       status: sent ? 'Sent' : channel === 'SMS' ? 'Ready' : 'Scheduled',
     }
   }
-  const emailDaysBefore = isCommercial(customer) ? 15 : 60
-  return [make(emailDaysBefore, 'Email'), make(14, 'SMS')]
-}
-
-// The single NEXT actionable reminder for one customer, or null. The seed is full
-// of overdue/due customers, so naively listing every past-dated reminder reads as a
-// backlog. Instead:
-//   - Upcoming: the earliest not-yet-sent reminder whose send date is today/future
-//     (an already-elapsed earlier reminder, e.g. a passed 60d email once we're inside
-//     the 14d window, is skipped — it no longer matters this cycle).
-//   - Due now: if both send dates have passed but the customer is not yet overdue
-//     (still inside the final pre-due window), surface the latest reminder as dueNow.
-//   - null: customer is already overdue — "remind before due" is moot; they live on
-//     the Map (red) and in the Due list instead.
-export function nextReminder(customer, sentIds = [], sentAt = {}) {
-  const today = startOfToday()
-  const due = nextDue(customer)
-  const all = remindersFor(customer, sentIds, sentAt)
-  // Earliest still-pending reminder whose window hasn't opened yet → Upcoming.
-  const future = all
-    .filter((r) => r.status !== 'Sent' && r.sendDate >= today)
-    .sort((a, b) => a.sendDate - b.sendDate)
-  if (future.length) return { ...future[0], dueNow: false }
-  // Past all send dates but not yet overdue: only the latest (the final SMS nudge)
-  // is still meaningful. If it's already been sent, the earlier reminders are
-  // elapsed/stale — nothing actionable remains, so drop the customer.
-  if (due >= today) {
-    const latest = all.reduce((a, b) => (b.sendDate > a.sendDate ? b : a))
-    if (latest.status !== 'Sent') return { ...latest, dueNow: true }
+  const list = []
+  if (customer.email && customer.email.trim() !== '') {
+    list.push(make(isCommercial(customer) ? 15 : 60, 'Email'))
   }
-  return null
+  if (customer.phone && customer.phone.trim() !== '') {
+    list.push(make(14, 'SMS'))
+  }
+  return list
 }
 
-// One next-actionable reminder per customer (drops overdue/all-sent customers).
-// This is exactly what the Scheduled view lists.
-export function nextReminders(customers, sentIds = [], sentAt = {}) {
-  return customers.map((c) => nextReminder(c, sentIds, sentAt)).filter(Boolean)
+// Every still-relevant reminder for a customer (both channels, separate items):
+//   - excluded if already Sent (those live in the Sent history instead),
+//   - excluded if the customer is overdue — "remind before due" is moot once the
+//     date has passed; they stay red on the Map and in the Due list. Dropping them
+//     here is what keeps the queue clean (no Send-now wall).
+// Each surviving reminder is tagged dueNow when its send window has already opened
+// (send date today/past) vs upcoming (send date in the future).
+export function remindersForCustomer(customer, sentIds = [], sentAt = {}) {
+  const today = startOfToday()
+  if (nextDue(customer) < today) return [] // overdue → drops out of the queue
+  return remindersFor(customer, sentIds, sentAt)
+    .filter((r) => r.status !== 'Sent')
+    .map((r) => ({ ...r, dueNow: r.sendDate < today }))
+}
+
+// All still-relevant reminders across customers — exactly what the Scheduled view lists.
+export function scheduledReminders(customers, sentIds = [], sentAt = {}) {
+  return customers.flatMap((c) => remindersForCustomer(c, sentIds, sentAt))
 }
 
 // Manually-sent reminders only, for the Sent filter / history.
@@ -79,5 +71,5 @@ export function sentHistory(customers, sentIds = [], sentAt = {}) {
 // Counts exactly the rows the Scheduled view shows, so the Due-tab
 // "Reminders scheduled" counter stays consistent with the list.
 export function scheduledCount(customers, sentIds = [], sentAt = {}) {
-  return nextReminders(customers, sentIds, sentAt).length
+  return scheduledReminders(customers, sentIds, sentAt).length
 }

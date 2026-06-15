@@ -59,9 +59,10 @@ export default function CustomerCard({ customer, onClose, onUpdate }) {
       name: draft.name,
       address: draft.address,
       phone: draft.phone,
+      email: draft.email,
       tankSizeGal: Number(draft.tankSizeGal),
       lastPumped: draft.lastPumped,
-      cycleMonths: Number(draft.cycleMonths),
+      cycleMonths: Number(draft.cycleMonths) || 36,
       notes: draft.notes,
     })
     setEditing(false)
@@ -102,6 +103,15 @@ export default function CustomerCard({ customer, onClose, onUpdate }) {
               <span className="text-gray-400">—</span>
             )}
           </Row>
+          <Row label="Email">
+            {customer.email ? (
+              <a href={`mailto:${customer.email}`} className="text-blue-700 underline">
+                {customer.email}
+              </a>
+            ) : (
+              <span className="text-gray-400">—</span>
+            )}
+          </Row>
           <Row label="Tank size">{customer.tankSizeGal.toLocaleString()} gal</Row>
           <Row label="Last pumped">{formatDate(customer.lastPumped)}</Row>
           <Row label="Cycle">
@@ -117,6 +127,32 @@ export default function CustomerCard({ customer, onClose, onUpdate }) {
             </span>
           </Row>
           <Row label="Notes">{customer.notes}</Row>
+
+          {/* Overdue customers have no auto-reminder by design, so give the
+              operator a manual nudge path — only for contacts that exist. */}
+          {status === 'overdue' && (customer.phone || customer.email) && (
+            <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg bg-red-50 px-3 py-2">
+              <span className="text-base font-semibold text-red-800">
+                Overdue — reach out:
+              </span>
+              {customer.phone && (
+                <a
+                  href={`tel:${customer.phone}`}
+                  className="text-base font-semibold text-blue-700 underline"
+                >
+                  Call
+                </a>
+              )}
+              {customer.email && (
+                <a
+                  href={`mailto:${customer.email}`}
+                  className="text-base font-semibold text-blue-700 underline"
+                >
+                  Email
+                </a>
+              )}
+            </div>
+          )}
 
           <div className="mt-4 flex flex-col gap-2">
             <button
@@ -145,6 +181,14 @@ export default function CustomerCard({ customer, onClose, onUpdate }) {
           </Field>
           <Field label="Phone">
             <input className={inputCls} value={draft.phone} onChange={set('phone')} />
+          </Field>
+          <Field label="Email">
+            <input
+              type="email"
+              className={inputCls}
+              value={draft.email || ''}
+              onChange={set('email')}
+            />
           </Field>
           <Field label="Tank size (gal)">
             <select
