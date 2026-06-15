@@ -78,6 +78,7 @@ function Legend({ customers, hiddenOnMobile }) {
 export default function MapTab({ customers, onUpdateCustomer, onAddCustomer }) {
   const [selectedId, setSelectedId] = useState(null)
   const [placingPin, setPlacingPin] = useState(false)
+  const [locating, setLocating] = useState(false) // mobile step 1: position pin, no form yet
   const [draftPin, setDraftPin] = useState(null) // {lat,lng}|null
   const [draftType, setDraftType] = useState(null) // 'residential'|'commercial'|null
   const [draftName, setDraftName] = useState('')
@@ -86,7 +87,10 @@ export default function MapTab({ customers, onUpdateCustomer, onAddCustomer }) {
   const mapRef = useRef(null)
   const wrapperRef = useRef(null)
   const selected = customers.find((c) => c.id === selectedId)
-  const sheetOpen = !!selected || placingPin
+  const isTouch = window.matchMedia('(pointer: coarse)').matches
+  // Mobile-only "locate" step: full map + draggable pin, form not yet shown.
+  const mobileLocate = isTouch && placingPin && locating
+  const sheetOpen = !!selected || (placingPin && !mobileLocate)
 
   useEffect(() => {
     if (!toast) return
@@ -102,10 +106,14 @@ export default function MapTab({ customers, onUpdateCustomer, onAddCustomer }) {
     setDraftAddress('')
     setSelectedId(null) // close any open customer card
     setPlacingPin(true)
+    // On touch devices start in the locate step (map only, no form); on
+    // desktop the side panel shows immediately as before.
+    setLocating(isTouch)
   }
 
   function resetDraft() {
     setPlacingPin(false)
+    setLocating(false)
     setDraftPin(null)
     setDraftType(null)
     setDraftName('')
@@ -141,7 +149,7 @@ export default function MapTab({ customers, onUpdateCustomer, onAddCustomer }) {
     mapRef.current?.invalidateSize()
     const t = setTimeout(() => mapRef.current?.invalidateSize(), 300)
     return () => clearTimeout(t)
-  }, [selectedId, placingPin])
+  }, [selectedId, placingPin, locating])
 
   return (
     <div className="relative h-full">
@@ -186,7 +194,7 @@ export default function MapTab({ customers, onUpdateCustomer, onAddCustomer }) {
           ))}
           {placingPin && draftPin && (
             <Marker
-              draggable
+              draggable={!isTouch || mobileLocate}
               position={[draftPin.lat, draftPin.lng]}
               icon={DRAFT_ICON}
               eventHandlers={{
@@ -199,10 +207,25 @@ export default function MapTab({ customers, onUpdateCustomer, onAddCustomer }) {
           )}
         </MapContainer>
         <Legend customers={customers} hiddenOnMobile={sheetOpen} />
-        {placingPin && (
+        {mobileLocate ? (
           <div className="absolute top-3 left-1/2 z-[1100] -translate-x-1/2 rounded-full bg-gray-900 px-4 py-2 text-center text-sm font-semibold text-white shadow-lg">
-            Drag the blue pin onto the lid, then pick a service type below.
+            Drag the pin onto the lid
           </div>
+        ) : (
+          placingPin &&
+          !isTouch && (
+            <div className="absolute top-3 left-1/2 z-[1100] -translate-x-1/2 rounded-full bg-gray-900 px-4 py-2 text-center text-sm font-semibold text-white shadow-lg">
+              Drag the blue pin onto the lid, then pick a service type below.
+            </div>
+          )
+        )}
+        {mobileLocate && (
+          <button
+            onClick={() => setLocating(false)}
+            className="fixed inset-x-0 bottom-0 z-[1200] w-full bg-blue-700 py-4 text-lg font-bold text-white"
+          >
+            Next →
+          </button>
         )}
         {!placingPin && !selected && (
           <button
@@ -220,7 +243,7 @@ export default function MapTab({ customers, onUpdateCustomer, onAddCustomer }) {
           onUpdate={(patch) => onUpdateCustomer(selected.id, patch)}
         />
       )}
-      {placingPin && (
+      {placingPin && !mobileLocate && (
         <NewLidPanel
           draftType={draftType}
           onPickType={setDraftType}

@@ -136,8 +136,7 @@ function PreviewPanel({ reminder, customer, onSendNow, onCopy, onClose }) {
             Copy text
           </button>
           <p className="text-sm text-gray-500">
-            One tap sends from your phone — or fully automatic once your number
-            is registered.
+            One tap sends from your phone.
           </p>
         </div>
       ) : (
