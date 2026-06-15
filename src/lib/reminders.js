@@ -47,16 +47,18 @@ export function remindersFor(customer, sentIds = [], sentAt = {}) {
 export function nextReminder(customer, sentIds = [], sentAt = {}) {
   const today = startOfToday()
   const due = nextDue(customer)
-  const pending = remindersFor(customer, sentIds, sentAt).filter(
-    (r) => r.status !== 'Sent'
-  )
-  const future = pending
-    .filter((r) => r.sendDate >= today)
+  const all = remindersFor(customer, sentIds, sentAt)
+  // Earliest still-pending reminder whose window hasn't opened yet → Upcoming.
+  const future = all
+    .filter((r) => r.status !== 'Sent' && r.sendDate >= today)
     .sort((a, b) => a.sendDate - b.sendDate)
   if (future.length) return { ...future[0], dueNow: false }
-  if (due >= today && pending.length) {
-    const latest = pending.reduce((a, b) => (b.sendDate > a.sendDate ? b : a))
-    return { ...latest, dueNow: true }
+  // Past all send dates but not yet overdue: only the latest (the final SMS nudge)
+  // is still meaningful. If it's already been sent, the earlier reminders are
+  // elapsed/stale — nothing actionable remains, so drop the customer.
+  if (due >= today) {
+    const latest = all.reduce((a, b) => (b.sendDate > a.sendDate ? b : a))
+    if (latest.status !== 'Sent') return { ...latest, dueNow: true }
   }
   return null
 }
