@@ -106,7 +106,8 @@ function PreviewPanel({ reminder, customer, onSendNow, onCopy, onClose }) {
           {reminder.status}
         </span>
         <span className="text-base text-gray-600">
-          Send date: {formatDate(reminder.sendDate)}
+          {reminder.status === 'Sent' ? 'Sent' : 'Send date'}:{' '}
+          {formatDate(reminder.sentDate || reminder.sendDate)}
         </span>
       </div>
 
@@ -135,9 +136,23 @@ function PreviewPanel({ reminder, customer, onSendNow, onCopy, onClose }) {
           >
             Copy text
           </button>
-          <p className="text-sm text-gray-500">
-            One tap sends from your phone.
-          </p>
+          {reminder.status !== 'Sent' ? (
+            <>
+              <button
+                onClick={onSendNow}
+                className="w-full rounded-lg bg-green-700 px-4 py-3 text-lg font-semibold text-white hover:bg-green-800"
+              >
+                Mark as sent
+              </button>
+              <p className="text-sm text-gray-500">
+                Text it yourself, then tap “Mark as sent.”
+              </p>
+            </>
+          ) : (
+            <p className="text-sm text-gray-500">
+              Marked sent {formatDate(reminder.sentDate || reminder.sendDate)}.
+            </p>
+          )}
         </div>
       ) : (
         reminder.status === 'Scheduled' && (
@@ -154,7 +169,7 @@ function PreviewPanel({ reminder, customer, onSendNow, onCopy, onClose }) {
   )
 }
 
-export default function RemindersTab({ customers, sentReminders, onMarkSent }) {
+export default function RemindersTab({ customers, sentReminders, sentAt, onMarkSent }) {
   const [filter, setFilter] = useState('Scheduled')
   const [selectedId, setSelectedId] = useState(null)
   const [toast, setToast] = useState(null)
@@ -167,7 +182,7 @@ export default function RemindersTab({ customers, sentReminders, onMarkSent }) {
 
   // Sent reads as history (newest first); Scheduled/All as a queue. The
   // "Scheduled" filter means "not yet Sent", so Ready SMS show there too.
-  const reminders = allReminders(customers, sentReminders)
+  const reminders = allReminders(customers, sentReminders, sentAt)
     .filter((r) =>
       filter === 'All'
         ? true
@@ -179,7 +194,7 @@ export default function RemindersTab({ customers, sentReminders, onMarkSent }) {
       filter === 'Sent' ? b.sendDate - a.sendDate : a.sendDate - b.sendDate
     )
 
-  const selected = allReminders(customers, sentReminders).find(
+  const selected = allReminders(customers, sentReminders, sentAt).find(
     (r) => r.id === selectedId
   )
   const selectedCustomer =
@@ -229,7 +244,8 @@ export default function RemindersTab({ customers, sentReminders, onMarkSent }) {
                     {r.customerName}
                   </div>
                   <div className="text-base text-gray-500">
-                    Send {formatDate(r.sendDate)}
+                    {r.status === 'Sent' ? 'Sent' : 'Send'}{' '}
+                    {formatDate(r.sentDate || r.sendDate)}
                   </div>
                   {r.channel === 'SMS' && (
                     <div className="text-sm text-gray-400">

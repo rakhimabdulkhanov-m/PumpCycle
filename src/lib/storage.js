@@ -32,6 +32,7 @@ export function loadState() {
         ),
         settings: { ...DEFAULT_SETTINGS, ...stored.settings },
         sentReminders: stored.sentReminders || [],
+        sentAt: stored.sentAt || {},
         baseDate: today,
       }
     }
@@ -43,6 +44,7 @@ export function loadState() {
       customers: shiftCustomers(seed.customers, daysBetween(SEED_BASE, today)),
       settings: { ...DEFAULT_SETTINGS },
       sentReminders: [],
+      sentAt: {},
       baseDate: today,
     }
   }

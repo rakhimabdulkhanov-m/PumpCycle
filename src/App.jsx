@@ -6,6 +6,7 @@ import MapTab from './components/MapTab.jsx'
 import DueTab from './components/DueTab.jsx'
 import RemindersTab from './components/RemindersTab.jsx'
 import { loadState, saveState } from './lib/storage.js'
+import { todayISO } from './lib/dates.js'
 
 function App() {
   const [tab, setTab] = useState('map')
@@ -37,7 +38,11 @@ function App() {
 
   function markReminderSent(reminderId) {
     if (data.sentReminders.includes(reminderId)) return
-    persist({ ...data, sentReminders: [...data.sentReminders, reminderId] })
+    persist({
+      ...data,
+      sentReminders: [...data.sentReminders, reminderId],
+      sentAt: { ...data.sentAt, [reminderId]: todayISO() },
+    })
   }
 
   return (
@@ -66,6 +71,7 @@ function App() {
           <RemindersTab
             customers={data.customers}
             sentReminders={data.sentReminders}
+            sentAt={data.sentAt}
             onMarkSent={markReminderSent}
           />
         )}
