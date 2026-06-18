@@ -167,6 +167,7 @@ export default function MapTab({ customers, onUpdateCustomer, onAddCustomer }) {
           zoom={11}
           className="h-full w-full"
           scrollWheelZoom
+          attributionControl={false}
         >
           <LayersControl position="topright">
             <LayersControl.BaseLayer checked name="Satellite">
