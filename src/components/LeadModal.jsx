@@ -57,9 +57,11 @@ export default function LeadModal({ open, onClose }) {
         ) : (
           <form onSubmit={submit}>
             <p className="mt-3 text-lg text-gray-700">
-              <strong>$500 setup + $99/month — live in a week.</strong>
-              <br />
-              We import your customer list for you.
+              <strong>$99/month. Month to month, cancel anytime.</strong>
+            </p>
+            <p className="mt-1 text-base text-gray-600">
+              One-time $500 setup gets you live in a week - I import your customer
+              list and set your reminders up for you.
             </p>
 
             <label className="mt-4 block">
