@@ -4,10 +4,16 @@ const RATE_LIMIT_KEY_PREFIX = 'lead'
 
 /**
  * Rate limit by client IP. Returns true when the request should be rejected.
- * A rate-limiter failure must never take the endpoint down, so it fails open.
+ *
+ * FAILS OPEN, deliberately, on both a missing binding and a throwing limiter: a rate
+ * limiter outage must not take lead capture down, because a dropped lead is lost revenue
+ * and the endpoint's whole job is to catch them. The cost is explicit - while the limiter
+ * is unavailable the amplification guard silently disappears and /api/lead is an
+ * unauthenticated endpoint that triggers an outbound Telegram fetch. Both branches are
+ * covered by tests in test/worker/lead.test.js so the choice cannot be flipped by accident.
  */
 async function isRateLimited(request, env) {
-  if (!env.LEAD_RATE_LIMITER) return false
+  if (!env.LEAD_RATE_LIMITER) return false // fail open: binding absent (see above)
   const ip = request.headers.get('CF-Connecting-IP') || 'unknown'
   try {
     const { success } = await env.LEAD_RATE_LIMITER.limit({
@@ -16,7 +22,7 @@ async function isRateLimited(request, env) {
     return !success
   } catch (err) {
     console.error('rate limiter failed, allowing request', err)
-    return false
+    return false // fail open: limiter threw (see above)
   }
 }
 
@@ -33,6 +39,14 @@ export async function post(request, env) {
   try {
     body = await request.json()
   } catch {
+    return json({ ok: false, error: 'invalid json' }, 400)
+  }
+
+  // request.json() only throws on malformed JSON. `null`, `"a string"`, `123`, `true` and
+  // `[]` are all valid JSON documents, and every one of them used to reach the honeypot
+  // read below - where `null.website` throws and escapes as a Cloudflare 1101 HTML error
+  // page on a public endpoint. Nothing past this point may see a non-object body.
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
     return json({ ok: false, error: 'invalid json' }, 400)
   }
 

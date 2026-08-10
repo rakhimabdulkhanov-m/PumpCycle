@@ -4,7 +4,7 @@ Loaded on top of the root CLAUDE.md. Covers only what matters when editing Worke
 
 ## File map
 - `index.js` - entrypoint; routes /api/* to handleApi, everything else to the assets layer
-- `tenants.js` - resolveTenant(); exports LIVE_TENANTS and DEMO_HOSTS
+- `tenants.js` - resolveTenant(); exports LIVE_TENANTS (DEMO_HOSTS is module-private)
 - `router.js` - explicit route table, method dispatch, 405/404 handling
 - `lib/json.js` - the only place a JSON Response is constructed
 - `api/` - one file per endpoint (e.g. api/lead.js)
@@ -44,6 +44,12 @@ Both must land in the same deploy. A host in LIVE_TENANTS whose bindings are abs
 Exists for local `wrangler dev` only. Lives in `.dev.vars`. It is deliberately absent from
 `wrangler.jsonc` vars - if it were a production var it would make tenant resolution overridable
 from the Cloudflare dashboard.
+
+Absence from the config is not the guard, though: a `wrangler secret put` or a dashboard
+variable would still land it in production. So `resolveTenant` only honours it when the
+**request hostname** is `localhost` or `127.0.0.1`. On any routable hostname it is ignored no
+matter what env says. The gate is the hostname because that is the one input an operator
+cannot change silently.
 
 When `DEV_TENANT_HOST` is unset, local dev resolves to demo. A `--remote` run without the var
 cannot write to a live client database by default.

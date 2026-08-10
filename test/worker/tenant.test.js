@@ -74,6 +74,47 @@ describe('resolveTenant — misconfigured (mapped host, missing bindings)', () =
   })
 })
 
+describe('resolveTenant — DEV_TENANT_HOST is local-dev only', () => {
+  const LIVE_HOST = 'test-devoverride.pumpcycle.net'
+
+  beforeEach(() => {
+    LIVE_TENANTS[LIVE_HOST] = { db: 'DB_LIVE_TEST' }
+  })
+
+  afterEach(() => {
+    delete LIVE_TENANTS[LIVE_HOST]
+  })
+
+  // The catastrophe this guards: one `wrangler secret put DEV_TENANT_HOST` or one
+  // dashboard variable pointing every hostname — demo. included — at one client's DB.
+  it('is ignored on a real hostname, which resolves to its own tenant', () => {
+    const env = { DEV_TENANT_HOST: LIVE_HOST, DB_LIVE_TEST: 'fake-db' }
+    const result = resolveTenant('demo.pumpcycle.net', env)
+    expect(result.kind).toBe('demo')
+    expect(result.host).toBe('demo.pumpcycle.net')
+  })
+
+  it('is ignored on an unknown real hostname (no rescue into a live tenant)', () => {
+    const env = { DEV_TENANT_HOST: LIVE_HOST, DB_LIVE_TEST: 'fake-db' }
+    const result = resolveTenant('evil.example.com', env)
+    expect(result.kind).toBe('unknown')
+    expect(result.host).toBe('evil.example.com')
+  })
+
+  it('still applies for localhost', () => {
+    const env = { DEV_TENANT_HOST: LIVE_HOST, DB_LIVE_TEST: 'fake-db' }
+    const result = resolveTenant('localhost', env)
+    expect(result.kind).toBe('live')
+    expect(result.host).toBe(LIVE_HOST)
+  })
+
+  it('still applies for localhost with a port, and for 127.0.0.1', () => {
+    const env = { DEV_TENANT_HOST: LIVE_HOST, DB_LIVE_TEST: 'fake-db' }
+    expect(resolveTenant('localhost:8787', env).host).toBe(LIVE_HOST)
+    expect(resolveTenant('127.0.0.1', env).host).toBe(LIVE_HOST)
+  })
+})
+
 // ---------------------------------------------------------------------------
 // HTTP-level tests via SELF.fetch — these go through the real worker fetch
 // handler, including the router.
@@ -171,5 +212,34 @@ describe('/api/lead on a live tenant — demo-gated route returns 404', () => {
     expect(res.status).toBe(404)
     const body = await res.json()
     expect(body.ok).toBe(false)
+  })
+
+  // The gate holds today only because router.js runs the demoOnly check before method
+  // dispatch. Move those two blocks and POST keeps 404ing while GET starts answering 405
+  // with `Allow: POST` — which confirms to anyone probing that the endpoint exists on a
+  // paying client's hostname. Every method is asserted so the order cannot drift.
+  for (const method of ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'HEAD']) {
+    it(`${method} /api/lead on a live tenant returns 404 and leaks no Allow header`, async () => {
+      const res = await SELF.fetch(`http://${LIVE_HOST}/api/lead`, { method })
+      expect(res.status).toBe(404)
+      expect(res.headers.get('allow')).toBe(null)
+      expect(res.headers.get('cache-control')).toBe('private, no-store')
+      expect(res.headers.get('content-type')).toContain('application/json')
+    })
+  }
+
+  it('the same methods on a demo host do NOT 404 — proving the 404s above are the gate', async () => {
+    // Control: without this, the loop above would still pass if /api/lead had simply
+    // stopped existing everywhere.
+    const post = await SELF.fetch('http://demo.pumpcycle.net/api/lead', {
+      method: 'POST',
+      body: JSON.stringify({ website: 'bot' }),
+      // Own client IP: the real rate limiter runs in the workers pool (3/60s per IP).
+      headers: { 'content-type': 'application/json', 'CF-Connecting-IP': '198.51.100.9' },
+    })
+    expect(post.status).toBe(200)
+    const get = await SELF.fetch('http://demo.pumpcycle.net/api/lead', { method: 'GET' })
+    expect(get.status).toBe(405)
+    expect(get.headers.get('allow')).toBe('POST')
   })
 })

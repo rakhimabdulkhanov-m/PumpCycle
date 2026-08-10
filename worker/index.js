@@ -1,5 +1,6 @@
 import { resolveTenant } from './tenants.js'
 import { isApiPath, handleApi } from './router.js'
+import { json } from './lib/json.js'
 
 /**
  * Single Worker with Static Assets.
@@ -23,8 +24,23 @@ export default {
     const url = new URL(request.url)
 
     if (isApiPath(url.pathname)) {
-      const tenant = resolveTenant(url.hostname, env)
-      return handleApi(request, env, ctx, url, tenant)
+      try {
+        const tenant = resolveTenant(url.hostname, env)
+        // awaited inside the try on purpose: `return handleApi(...)` would hand the
+        // promise back before it rejects and the catch below would never run.
+        return await handleApi(request, env, ctx, url, tenant)
+      } catch (err) {
+        // Defence in depth. Anything that throws below this line - today or in a route
+        // written next month - would otherwise escape as Cloudflare's 1101 error page:
+        // HTML, status 500, and a cache-control header this Worker never chose, on a
+        // public endpoint. Here it becomes JSON with the standard header instead.
+        //
+        // The error goes to console.error (Workers observability is enabled in
+        // wrangler.jsonc) and NOT into the response body: message and stack are
+        // internals, and /api/* is unauthenticated.
+        console.error('unhandled error handling', request.method, url.pathname, err)
+        return json({ ok: false, error: 'internal error' }, 500)
+      }
     }
 
     return env.ASSETS.fetch(request)

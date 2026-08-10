@@ -5,9 +5,16 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist', '.wrangler']),
+  // e2e/ is frozen evidence, not source. Every script there was copied verbatim out of the
+  // session that produced the measurement it records, so a fresh-context agent can re-run
+  // exactly what was run and compare. Linting them invites reformatting and "fixes", which
+  // would make them describe a run that never happened. Do not lint, do not edit.
+  globalIgnores(['dist', '.wrangler', 'e2e/**']),
   {
-    files: ['**/*.{js,jsx}'],
+    // .mjs is included on purpose: scripts/ is ESM-only, and while this pattern was
+    // '**/*.{js,jsx}' the cutover gate script was silently unlinted (`--print-config`
+    // reported 0 rules for it).
+    files: ['**/*.{js,jsx,mjs}'],
     extends: [
       js.configs.recommended,
       reactHooks.configs.flat.recommended,
@@ -16,6 +23,18 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
       parserOptions: { ecmaFeatures: { jsx: true } },
+    },
+  },
+  // Node-side scripts (ESM, top-level await): they need process/Buffer/console, which are
+  // not in globals.browser, and the React rules above are irrelevant to them.
+  {
+    files: ['scripts/**/*.{js,mjs}'],
+    languageOptions: {
+      globals: globals.node,
+    },
+    rules: {
+      'react-hooks/rules-of-hooks': 'off',
+      'react-refresh/only-export-components': 'off',
     },
   },
   // Test files: vitest globals (describe, it, expect, vi, …) + node globals
@@ -29,20 +48,6 @@ export default defineConfig([
         ...globals.node,
         ...globals.vitest,
       },
-    },
-  },
-  // e2e scripts run under Node with top-level await (ESM). They are not
-  // React files so react-hooks / react-refresh rules are irrelevant, and
-  // they need Node globals (process, etc.).
-  // no-new-func is enabled here so that the `eslint-disable-next-line no-new-func`
-  // comments inside x3_prod.mjs and x3_dev.mjs are not flagged as unused directives.
-  {
-    files: ['e2e/**/*.mjs'],
-    languageOptions: {
-      globals: globals.node,
-    },
-    rules: {
-      'no-new-func': 'error',
     },
   },
 ])

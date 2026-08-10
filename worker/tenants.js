@@ -3,8 +3,9 @@
  *
  * THE HOSTNAME IS THE ONLY INPUT. Never a header, query param, cookie or request body:
  * anything the caller can set is a tenant-switching primitive, and this Worker will hold
- * per-client databases. The single exception is the DEV_TENANT_HOST var, which is
- * operator-controlled config (set in .dev.vars for local dev), not request data.
+ * per-client databases. The one override, DEV_TENANT_HOST, is operator config rather than
+ * request data - and it is honoured only when the request arrived on a local dev host
+ * (see LOCAL_DEV_HOSTS below).
  */
 
 /** Hosts that serve the public demo / marketing SPA. Shared, no client data. */
@@ -34,6 +35,12 @@ const DEMO_HOSTS = new Set([
  */
 export const LIVE_TENANTS = {}
 
+/**
+ * The only hostnames on which DEV_TENANT_HOST is honoured. `wrangler dev` serves on these
+ * and nothing routable does.
+ */
+const LOCAL_DEV_HOSTS = new Set(['localhost', '127.0.0.1'])
+
 /** Strips a trailing :port. Host headers arrive as 'localhost:8787' in dev. */
 function normalizeHost(host) {
   return String(host || '')
@@ -55,8 +62,19 @@ function isDemoHost(host) {
  *            db?:object, r2?:object, missing?:string[]}}
  */
 export function resolveTenant(hostname, env) {
-  const override = normalizeHost(env && env.DEV_TENANT_HOST)
-  const host = override || normalizeHost(hostname)
+  const requestHost = normalizeHost(hostname)
+
+  // DEV_TENANT_HOST is honoured ONLY when the request itself arrived on a local dev host,
+  // and the gate is the request hostname - not an environment name, not a var, not a flag.
+  // Everything else in env is settable from the Cloudflare dashboard or by one
+  // `wrangler secret put`, and this var repoints tenant resolution: set in production it
+  // would aim EVERY hostname, demo. included, at a single client's database. That is the
+  // exact failure this whole module exists to prevent. The request hostname is the one
+  // input an operator cannot silently change, so it is what decides.
+  const override = LOCAL_DEV_HOSTS.has(requestHost)
+    ? normalizeHost(env && env.DEV_TENANT_HOST)
+    : ''
+  const host = override || requestHost
 
   if (isDemoHost(host)) return { kind: 'demo', host }
 
