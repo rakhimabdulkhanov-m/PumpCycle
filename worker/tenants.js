@@ -12,7 +12,6 @@ const DEMO_HOSTS = new Set([
   'demo.pumpcycle.net',
   'pumpcycle.net',
   'www.pumpcycle.net',
-  'next.pumpcycle.net',
   'localhost',
   '127.0.0.1',
 ])

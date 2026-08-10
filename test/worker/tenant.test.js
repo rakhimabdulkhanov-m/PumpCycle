@@ -13,7 +13,6 @@ describe('resolveTenant — demo hosts', () => {
     'demo.pumpcycle.net',
     'pumpcycle.net',
     'www.pumpcycle.net',
-    'next.pumpcycle.net',
     'pumpcycle.workers.dev',
     'preview.pumpcycle.workers.dev',
     'localhost',

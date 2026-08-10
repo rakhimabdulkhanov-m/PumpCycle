@@ -1,10 +1,11 @@
 // Cutover comparison: is the Worker host serving byte-identical content to the Pages host?
 //
 //   node scripts/compare_hosts.mjs
-//   node scripts/compare_hosts.mjs --a=https://demo.pumpcycle.net --b=https://next.pumpcycle.net
+//   node scripts/compare_hosts.mjs --a=https://pumpcycle.net --b=https://demo.pumpcycle.net
 //   node scripts/compare_hosts.mjs --live-lead      # also POSTs a real lead to B (arrives in Telegram)
 //
-// A is the reference (today: the Pages deployment). B is the candidate (the Worker).
+// A is the reference, B is the candidate. Every host now runs the same Worker, so this is a
+// regression check: point A at a known-good host and B at whatever changed.
 // Both are built from the same dist/, so any body-hash mismatch is itself the finding.
 // Exits non-zero if anything differs, so this can gate a cutover.
 
@@ -15,8 +16,8 @@ const arg = (name, fallback) => {
   return hit ? hit.slice(name.length + 3) : fallback
 }
 
-const A = arg('a', 'https://demo.pumpcycle.net').replace(/\/$/, '')
-const B = arg('b', 'https://next.pumpcycle.net').replace(/\/$/, '')
+const A = arg('a', 'https://pumpcycle.net').replace(/\/$/, '')
+const B = arg('b', 'https://demo.pumpcycle.net').replace(/\/$/, '')
 const LIVE_LEAD = process.argv.includes('--live-lead')
 
 const sha = (buf) => createHash('sha256').update(buf).digest('hex')
