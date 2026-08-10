@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import Topbar from './components/Topbar.jsx'
 import TabNav from './components/TabNav.jsx'
 import LeadModal from './components/LeadModal.jsx'
@@ -12,6 +12,16 @@ function App() {
   const [tab, setTab] = useState('map')
   const [modalOpen, setModalOpen] = useState(false)
   const [data, setData] = useState(loadState)
+  // When a customer is added with a geocoded address, store the target here so
+  // MapTab can fly to it.  Consumed (set back to null) by MapTab after flying.
+  const [flyTarget, setFlyTarget] = useState(null)
+  // Stable identity on purpose: MapTab keeps the target alive until the map has
+  // actually arrived, and a fresh callback on every render would restart that
+  // effect and lose the listener it is waiting on.
+  const clearFlyTarget = useCallback(() => setFlyTarget(null), [])
+  // Where the map was left. MapTab unmounts on every tab switch, so it hands
+  // its view back on the way out and starts there the next time it mounts.
+  const [mapView, setMapView] = useState({ center: [35.28, -81.17], zoom: 11 })
 
   function persist(next) {
     setData(next)
@@ -42,10 +52,26 @@ function App() {
   }
 
   function addCustomer(fields) {
+    // Strip the map-routing flags before persisting: they aren't customer data.
+    const { geocoded, revealPin, ...customerFields } = fields
     persist({
       ...data,
-      customers: [...data.customers, { ...fields, id: `c-${Date.now()}` }],
+      customers: [...data.customers, { ...customerFields, id: `c-${Date.now()}` }],
     })
+    const { lat, lng } = customerFields
+    if (geocoded) {
+      // Switch to the map tab and fly to the geocoded address so the seller can
+      // see the yard on satellite and place/confirm the lid pin position.
+      // Zoom 19 puts a single residential yard in full view on satellite tiles.
+      setFlyTarget({ lat, lng, zoom: 19 })
+      setTab('map')
+    } else if (revealPin) {
+      // Geocode missed. Don't steal the tab (he may still be working the list),
+      // but leave a target so the map is centred on the fallback pin whenever he
+      // does open it - which is what the amber line just promised him. Zoom 15
+      // shows the pin plus enough streets around it to get his bearings.
+      setFlyTarget({ lat, lng, zoom: 15 })
+    }
   }
 
   function setAvgJobPrice(price) {
@@ -71,6 +97,10 @@ function App() {
             customers={data.customers}
             onUpdateCustomer={updateCustomer}
             onAddCustomer={addCustomer}
+            flyTarget={flyTarget}
+            onFlyConsumed={clearFlyTarget}
+            initialView={mapView}
+            onLeaveView={setMapView}
           />
         )}
         {tab === 'due' && (

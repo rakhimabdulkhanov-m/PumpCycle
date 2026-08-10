@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { MapContainer, TileLayer, Marker, LayersControl } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, LayersControl, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { dueStatus, todayISO } from '../lib/dates.js'
@@ -36,6 +36,51 @@ const ICONS = {
 // Blue draft pin — visually distinct from the red/yellow/green customer pins
 // so the "new one" reads clearly while it's being placed.
 const DRAFT_ICON = makeIcon('#2563eb')
+
+// Anything past this is a different part of the country, not the next street:
+// flying it takes 8-10 s of swooping, so jump there instead.
+const FLY_MAX_METERS = 50000
+
+// Fly to a location saved from Add Customer (Due tab). Lives INSIDE
+// MapContainer on purpose: children only render once the map exists, so useMap()
+// always returns a real instance. A parent effect would miss the common case
+// where the map mounts with a target already waiting (MapContainer's forwarded
+// ref is still null on the first commit). The effect runs once per target
+// object: App hands back a stable onConsumed, so a re-render can't re-fly.
+function FlyToTarget({ target, onConsumed }) {
+  const map = useMap()
+  useEffect(() => {
+    if (!target) return
+    const to = [target.lat, target.lng]
+    // The target is consumed on arrival, not at take-off. Flipping to the Due
+    // list during the ~3 s animation unmounts the map mid-flight; holding the
+    // target means the next mount flies to the same yard instead of stranding
+    // the seller at the view he started from with nothing left to re-fly.
+    // Only an arrival counts - an invalidateSize can also fire moveend.
+    const settled = () => {
+      if (map.getCenter().distanceTo(to) < 1) onConsumed()
+    }
+    map.on('moveend', settled)
+    if (map.distance(map.getCenter(), to) > FLY_MAX_METERS) map.setView(to, target.zoom)
+    else map.flyTo(to, target.zoom)
+    return () => map.off('moveend', settled)
+  }, [target, map, onConsumed])
+  return null
+}
+
+// The seller flips to the Due list mid-call and comes back; MapTab unmounts on
+// every tab switch, so the view is stashed in a ref App owns and outlives it.
+// Written after every settled move/zoom rather than on unmount, where the map
+// instance is already being torn down.
+function RememberView({ storeRef }) {
+  const map = useMapEvents({
+    moveend: () => {
+      const c = map.getCenter()
+      storeRef.current = { center: [c.lat, c.lng], zoom: map.getZoom() }
+    },
+  })
+  return null
+}
 
 function Toast({ message }) {
   return (
@@ -75,7 +120,15 @@ function Legend({ customers, hiddenOnMobile }) {
   )
 }
 
-export default function MapTab({ customers, onUpdateCustomer, onAddCustomer }) {
+export default function MapTab({
+  customers,
+  onUpdateCustomer,
+  onAddCustomer,
+  flyTarget,
+  onFlyConsumed,
+  initialView,
+  onLeaveView,
+}) {
   const [selectedId, setSelectedId] = useState(null)
   const [placingPin, setPlacingPin] = useState(false)
   const [locating, setLocating] = useState(false) // mobile step 1: position pin, no form yet
@@ -86,6 +139,7 @@ export default function MapTab({ customers, onUpdateCustomer, onAddCustomer }) {
   const [toast, setToast] = useState(null)
   const mapRef = useRef(null)
   const wrapperRef = useRef(null)
+  const viewRef = useRef(initialView)
   const selected = customers.find((c) => c.id === selectedId)
   const isTouch = window.matchMedia('(pointer: coarse)').matches
   // Mobile-only "locate" step: full map + draggable pin, form not yet shown.
@@ -137,6 +191,11 @@ export default function MapTab({ customers, onUpdateCustomer, onAddCustomer }) {
     resetDraft()
   }
 
+  // Hand the last view back to App on the way out. Read from a ref the map
+  // fills in on moveend, not from Leaflet itself, which is already being torn
+  // down by the time this runs.
+  useEffect(() => () => onLeaveView(viewRef.current), [onLeaveView])
+
   // Leaflet caches its container size; without invalidateSize after the
   // wrapper resizes (bottom sheet, iOS toolbar/keyboard, rotation) tiles
   // stay gray and tap hit-testing lands on the wrong spot.
@@ -163,12 +222,21 @@ export default function MapTab({ customers, onUpdateCustomer, onAddCustomer }) {
       >
         <MapContainer
           ref={mapRef}
-          center={[35.28, -81.17]}
-          zoom={11}
+          center={initialView.center}
+          zoom={initialView.zoom}
           className="h-full w-full"
           scrollWheelZoom
+          // A second click on the save button lands here once the modal closes;
+          // dblclick-zoom would hijack the fly-to. Wheel, pinch and +/- still zoom.
+          doubleClickZoom={false}
           attributionControl={false}
         >
+          {/* RememberView first on purpose: sibling effects run in this order, and a
+              >50 km target arrives via setView, whose moveend fires synchronously
+              inside FlyToTarget's effect. Subscribed second, RememberView would miss
+              the only moveend that jump ever fires and hand back the pre-jump view. */}
+          <RememberView storeRef={viewRef} />
+          <FlyToTarget target={flyTarget} onConsumed={onFlyConsumed} />
           <LayersControl position="topright">
             <LayersControl.BaseLayer checked name="Satellite">
               <TileLayer
@@ -186,12 +254,24 @@ export default function MapTab({ customers, onUpdateCustomer, onAddCustomer }) {
               />
             </LayersControl.BaseLayer>
           </LayersControl>
+          {/* Pins are draggable so the lid can be nudged onto the actual tank while
+              the customer is on the phone ("side of the house? here?"). On touch
+              only the open card's pin drags, the same way the draft pin waits for
+              its own step: otherwise a pan that starts on a pin would move it. */}
           {customers.map((c) => (
             <Marker
               key={c.id}
               position={[c.lat, c.lng]}
               icon={ICONS[dueStatus(c)]}
-              eventHandlers={{ click: () => setSelectedId(c.id) }}
+              draggable={!isTouch || selectedId === c.id}
+              eventHandlers={{
+                click: () => setSelectedId(c.id),
+                dragend: (e) => {
+                  const ll = e.target.getLatLng()
+                  onUpdateCustomer(c.id, { lat: ll.lat, lng: ll.lng })
+                  setToast(`Lid moved for ${c.name}`)
+                },
+              }}
             />
           ))}
           {placingPin && draftPin && (
