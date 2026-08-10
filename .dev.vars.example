@@ -1,0 +1,9 @@
+# Copy to .dev.vars for local `wrangler dev`. .dev.vars is gitignored - never commit real values.
+# Production values live in Cloudflare secrets: `wrangler secret put TELEGRAM_TOKEN`.
+
+TELEGRAM_TOKEN="000000:replace-me"
+TELEGRAM_CHAT_ID="000000000"
+
+# Local-only tenant override: pretend the request arrived on this hostname.
+# Leave empty to use the real Host (localhost -> demo tenant).
+DEV_TENANT_HOST=""
