@@ -1,1 +1,7 @@
-@import "tailwindcss";
+/* source(none) turns off Tailwind's automatic file discovery, then @source names the one
+   directory that actually renders UI. Without this, Tailwind scans the whole repo and any
+   class-shaped string in worker code, tests, e2e scripts or a markdown file gets compiled
+   into the shipped stylesheet - so adding a doc changes the production CSS hash and the
+   host-to-host byte comparison in scripts/compare_hosts.mjs stops meaning anything. */
+@import "tailwindcss" source(none);
+@source "./";

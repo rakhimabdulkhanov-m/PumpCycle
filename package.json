@@ -9,7 +9,9 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "dev:worker": "wrangler dev",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "npm run build && wrangler deploy",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.0",
@@ -20,6 +22,7 @@
     "tailwindcss": "^4.3.0"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.20.3",
     "@eslint/js": "^10.0.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
@@ -28,7 +31,9 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.6.0",
+    "playwright-core": "^1.62.1",
     "vite": "^8.0.12",
+    "vitest": "^4.1.10",
     "wrangler": "^4.120.0"
   }
 }
