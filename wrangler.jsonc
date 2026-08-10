@@ -1,0 +1,42 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "pumpcycle",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-08-01",
+
+  // Custom domains (demo.pumpcycle.net, app.pumpcycle.net, ...) are attached by hand
+  // in the dashboard after the first deploy. Deliberately no "routes"/"route" key here.
+
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    // Unmatched paths serve index.html so the SPA can boot and route client-side.
+    "not_found_handling": "single-page-application",
+    // Without this the assets layer answers first and every /api/* path 404s.
+    // "/api" is listed separately: "/api/*" does not match the bare path, and without it
+    // GET /api answers 200 + index.html from the assets layer.
+    "run_worker_first": ["/api", "/api/*"]
+  },
+
+  "observability": {
+    "enabled": true
+  },
+
+  // Public unauthenticated endpoint that triggers an outbound fetch -> amplification target.
+  // 3 requests / 60s per client IP. period must be 10 or 60 (wrangler schema enum).
+  "ratelimits": [
+    {
+      "name": "LEAD_RATE_LIMITER",
+      "namespace_id": "9021",
+      "simple": {
+        "limit": 3,
+        "period": 60
+      }
+    }
+  ]
+
+  // DEV_TENANT_HOST overrides the hostname used for tenant resolution. It is deliberately
+  // NOT declared here: shipping it as a production var makes "which client's data does this
+  // request see" settable from the dashboard. resolveTenant() handles it being undefined.
+  // It lives only in .dev.vars, for local wrangler dev.
+}
