@@ -1,20 +1,33 @@
 #!/usr/bin/env node
 /**
- * migrate.mjs — apply pending D1 schema migrations to one named tenant.
+ * migrate.mjs - apply pending D1 schema migrations to one named tenant.
  *
  * Usage:
  *   node scripts/migrate.mjs --tenant=dev [--local] [--dry-run]
  *
  * --tenant   REQUIRED. Tenant key from scripts/tenants.config.mjs.
  * --local    Run against the local wrangler dev database instead of the remote.
- * --dry-run  Print what would be applied and exit 0 without touching anything.
+ * --dry-run  Print what would be applied and exit 0 WITHOUT writing anything.
+ *            It still reads the database and still runs every safety check
+ *            below, so it exits 1 on a check that fails. A dry run that skipped
+ *            the checks would report "1 pending migration" for a tree the real
+ *            run refuses to touch.
  *
- * Migration immutability guarantee
- * ---------------------------------
- * Migration files are numbered and must never change after they have been
- * applied. The sha256 of every applied file is stored in the 'migration_hashes'
- * settings row (JSON array of {num, sha256}). On each run the script verifies
- * the on-disk content against the stored hashes and fails loudly on mismatch.
+ * Safety checks, all of them fail-closed (exit 1) in both modes:
+ *
+ * 1. One file per migration number. Two files numbered 0002 are ambiguous about
+ *    what "version 2" contains and about which one ran.
+ *
+ * 2. Migration immutability. Numbered files must never change after they have
+ *    been applied. The sha256 of every applied file is stored in the
+ *    'migration_hashes' settings row (JSON array of {num, sha256}); each run
+ *    compares the on-disk content against it.
+ *
+ * 3. A stored hash must EXIST for every applied migration. Missing is a hard
+ *    failure, not a warning: it used to print "Skipping verify" and continue,
+ *    which meant deleting one settings row turned check 2 off entirely and left
+ *    a line in a log nobody reads as the only trace. Re-record deliberately
+ *    (see the message the failure prints) rather than by running the tool.
  */
 
 import { createHash } from 'crypto'
@@ -248,9 +261,37 @@ if (migrations.length === 0) {
   process.exit(0)
 }
 
+// ---------------------------------------------------------------------------
+// Check 1: one file per number. Runs before anything touches the database, so
+// the message is about the tree in front of you and not about the schema.
+//
+// Without it, a NEW file that reuses an applied number is caught further down by
+// the hash check and reported as "0001 has been modified after it was applied",
+// which is a different accident with a different fix and sends whoever reads it
+// looking for an edit that never happened.
+// ---------------------------------------------------------------------------
+const byNum = new Map()
+for (const m of migrations) {
+  if (!byNum.has(m.num)) byNum.set(m.num, [])
+  byNum.get(m.num).push(m.name)
+}
+const duplicates = [...byNum.entries()].filter(([, names]) => names.length > 1)
+if (duplicates.length > 0) {
+  for (const [num, names] of duplicates) {
+    console.error(
+      `ERROR: migration number ${String(num).padStart(4, '0')} is used by ${names.length} files: ${names.join(', ')}`
+    )
+  }
+  console.error('Each migration number must belong to exactly one file. Renumber the new one.')
+  process.exit(1)
+}
+
 const highestOnDisk = migrations[migrations.length - 1].num
 
-// Read current version (may fail gracefully to 0 in dry-run if DB is unreachable)
+// Reads the database in every mode, dry-run included. Only a missing table
+// reads as version 0; an unreachable database or a bad credential throws (see
+// wranglerQuery), because "I could not ask" must never look like "nothing is
+// applied".
 const currentVersion = getCurrentVersion()
 console.log(`Current schema version: ${currentVersion}`)
 console.log(`Highest migration on disk: ${highestOnDisk}`)
@@ -260,9 +301,11 @@ const applied = migrations.filter((m) => m.num <= currentVersion)
 const pending = migrations.filter((m) => m.num > currentVersion)
 
 // ---------------------------------------------------------------------------
-// Verify immutability of applied migrations (skip if none applied yet)
+// Checks 2 and 3: immutability of applied migrations (skip only if none applied
+// yet). Runs in dry-run too - a dry run is how you find out whether the real run
+// is safe, so a dry run that skips the safety checks answers the wrong question.
 // ---------------------------------------------------------------------------
-if (applied.length > 0 && !dryRun) {
+if (applied.length > 0) {
   const storedHashes = getStoredHashes()
   const storedMap = new Map(storedHashes.map((h) => [h.num, h.sha256]))
 
@@ -270,9 +313,22 @@ if (applied.length > 0 && !dryRun) {
     const onDisk = sha256File(m.path)
     const stored = storedMap.get(m.num)
     if (stored === undefined) {
-      // Hash not yet recorded (legacy or first run after hash tracking added)
-      console.warn(`WARN: No stored hash for applied migration ${m.name}. Skipping verify.`)
-      continue
+      console.error(`ERROR: No stored hash for applied migration ${m.name}.`)
+      console.error(
+        '  The immutability check cannot run without it, and continuing would mean ' +
+          'applying migrations against a schema whose history is unverifiable.'
+      )
+      console.error(
+        `  Either settings.migration_hashes was deleted or edited, or ${m.name} was ` +
+          'applied by something other than this script.'
+      )
+      console.error(
+        `  If the file on disk is definitely what was applied, record it deliberately:\n` +
+          `    on-disk sha256 of ${m.name}: ${onDisk}\n` +
+          `    then add {"num": ${m.num}, "sha256": "${onDisk}"} to the JSON array in the ` +
+          `settings row with key 'migration_hashes'.`
+      )
+      process.exit(1)
     }
     if (stored !== onDisk) {
       console.error(`ERROR: Migration ${m.name} has been modified after it was applied!`)

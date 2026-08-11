@@ -5,6 +5,7 @@ export default function NewLidPanel({
   onName,
   address,
   onAddress,
+  pinPlaced,
   canSave,
   onSave,
   onCancel,
@@ -65,7 +66,15 @@ export default function NewLidPanel({
         />
       </div>
 
-      <div className="flex gap-3 border-t border-gray-200 p-5">
+      <div className="border-t border-gray-200 p-5">
+        {/* The pin is saved as "placed by hand", the strongest location this app
+            has. It has to actually have been placed by a hand. */}
+        {!pinPlaced && (
+          <p className="mb-3 text-base font-semibold text-amber-700">
+            Put the pin on the lid first.
+          </p>
+        )}
+        <div className="flex gap-3">
         <button
           onClick={onSave}
           disabled={!canSave}
@@ -79,6 +88,7 @@ export default function NewLidPanel({
         >
           Cancel
         </button>
+        </div>
       </div>
     </div>
   )

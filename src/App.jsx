@@ -8,6 +8,26 @@ import RemindersTab from './components/RemindersTab.jsx'
 import { loadState, saveState } from './lib/storage.js'
 import { todayISO } from './lib/dates.js'
 
+/**
+ * Ids must be unique, because they are the only thing that says which customer a
+ * pin placement belongs to: updateCustomer patches EVERY customer whose id
+ * matches, so two customers sharing one id are one customer with two rows on
+ * screen. `c-${Date.now()}` collides whenever two are created in the same
+ * millisecond, which is one paste of an import loop or two fast clicks.
+ *
+ * The 'c-' prefix stays so already-stored ids and the seed's c001.. keep working
+ * unchanged; nothing parses what comes after it. randomUUID needs a secure
+ * context (https or localhost), which production and the dev server both are;
+ * the fallback exists so an http LAN address degrades to a near-unique id
+ * instead of a TypeError in the middle of adding a customer.
+ */
+function newCustomerId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `c-${crypto.randomUUID()}`
+  }
+  return `c-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 function App() {
   const [tab, setTab] = useState('map')
   const [modalOpen, setModalOpen] = useState(false)
@@ -53,25 +73,23 @@ function App() {
 
   function addCustomer(fields) {
     // Strip the map-routing flags before persisting: they aren't customer data.
-    const { geocoded, revealPin, ...customerFields } = fields
+    const { geocoded, flyZoom, ...customerFields } = fields
     persist({
       ...data,
-      customers: [...data.customers, { ...customerFields, id: `c-${Date.now()}` }],
+      customers: [...data.customers, { ...customerFields, id: newCustomerId() }],
     })
     const { lat, lng } = customerFields
     if (geocoded) {
       // Switch to the map tab and fly to the geocoded address so the seller can
-      // see the yard on satellite and place/confirm the lid pin position.
-      // Zoom 19 puts a single residential yard in full view on satellite tiles.
-      setFlyTarget({ lat, lng, zoom: 19 })
+      // see the yard on satellite and place/confirm the lid pin position. How
+      // close depends on what was actually found: zoom 19 shows one yard, which
+      // is right for a house match and useless for a town match. The modal
+      // decides; App just carries it.
+      setFlyTarget({ lat, lng, zoom: flyZoom })
       setTab('map')
-    } else if (revealPin) {
-      // Geocode missed. Don't steal the tab (he may still be working the list),
-      // but leave a target so the map is centred on the fallback pin whenever he
-      // does open it - which is what the amber line just promised him. Zoom 15
-      // shows the pin plus enough streets around it to get his bearings.
-      setFlyTarget({ lat, lng, zoom: 15 })
     }
+    // No geocode means no pin and nowhere to fly. The map deliberately does not
+    // move: nothing was invented for it to move to.
   }
 
   function setAvgJobPrice(price) {
@@ -111,6 +129,9 @@ function App() {
             onUpdateCustomer={updateCustomer}
             onAddCustomer={addCustomer}
             onSetAvgJobPrice={setAvgJobPrice}
+            // Where the map is right now, so a geocode hit on the other side of
+            // the country comes back flagged instead of silently flying there.
+            mapCenter={mapView.center}
           />
         )}
         {tab === 'reminders' && (

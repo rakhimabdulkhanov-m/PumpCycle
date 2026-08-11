@@ -93,3 +93,32 @@ correct build directory.
 | `tC.mjs` | Superseded by `tC_prod.mjs` (same tests, old dev port 4211) |
 | `tD.mjs` | Superseded by `tD_prod.mjs` (same tests, old dev port 4211) |
 | `t1.mjs` through `t9.mjs` | From a much earlier iteration (ports 4188 and 4199); entirely superseded |
+
+## SUPERSEDED as of 2026-08-11 - do not re-run as a pass/fail gate
+
+These scripts are frozen evidence of the runs that produced them, so they are
+kept byte-identical and are NOT updated when the app changes. On 2026-08-11 the
+address lookup was rebuilt and two behaviours these scripts assert on were
+deliberately removed:
+
+1. **The Gastonia jitter fallback is gone.** An address that geocodes to nothing
+   used to drop a random pin near Gastonia NC (`35.26 +/- 0.06`, `-81.18 +/- 0.09`).
+   It now stores no location at all: `lat` and `lng` are both `null` and the
+   customer appears under "No pin yet (N)" instead of on a fake pin. The old
+   behaviour put a Pennsylvania client's customer in North Carolina.
+2. **The `Found — map will fly here on save.` string is gone**, replaced by an
+   echo of the address the geocoder actually matched, plus separate copy for
+   road-level and town-level results.
+
+Any script matching `Gastonia`, `35.26`, `jitter`, `Found —` or
+`Address not found` therefore fails against current code, and that failure is
+the intended change rather than a regression. The behaviours that replaced them
+are covered by `test/worker/geocode.test.js` and
+`test/lib/geocode-normalize.test.js`, which do run in `npm test`.
+
+Affected: `tA_prod`, `tB2`, `tB_prod`, `tC_prod`, `tE_prod`, `tF`, `tZ`, `tZ2`,
+`tZ3`, `tZ4`, `tZ5`, `vH`, `vI`, `vJ`, `vK`, `vL`, `x1_prod`, `x2_dev`,
+`x2_prod`, `x2b_probe`, `x3_dev`, `x3_prod`.
+
+Still valid: `tD_prod` (already-mounted fly), `tG` (touch draggability),
+`vM`, `tZ`-family assertions about double-click that do not touch the fallback.

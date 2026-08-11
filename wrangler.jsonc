@@ -32,6 +32,19 @@
         "limit": 3,
         "period": 60
       }
+    },
+    // Address lookups get their own budget. /api/lead is a stranger submitting
+    // one form, so 3/60s is generous there. Geocoding is an owner adding
+    // customers off a paper book during setup week: four new addresses in a
+    // minute is ordinary work, and sharing the lead budget would 429 him on the
+    // fourth behind copy that reads like his address was wrong.
+    {
+      "name": "GEOCODE_RATE_LIMITER",
+      "namespace_id": "9022",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
     }
   ],
 

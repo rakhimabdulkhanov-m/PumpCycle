@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { nextDue, daysUntilDue, dueStatus, formatDate, todayISO, isCommercial } from '../lib/dates.js'
+import { pinConfirmCase } from '../lib/location.js'
 
 const STATUS_STYLES = {
   overdue: 'bg-red-100 text-red-800',
@@ -32,6 +33,18 @@ function Field({ label, children }) {
 const inputCls =
   'mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-lg focus:border-blue-600 focus:outline-none'
 
+/**
+ * One line, no banner. The card is what he reads before driving out, so it is
+ * the last honest moment to say "this pin was never checked" - a town centroid
+ * can be several miles from the yard. A banner would be shouting; a line under
+ * the address is read at the same time as the address.
+ */
+const PIN_NOTE = {
+  no_location: 'No pin yet - open the map and place it on the lid.',
+  locality: 'Pin is town-level - drag it onto the lid.',
+  road: 'Pin is road-level - drag it onto the lid.',
+}
+
 export default function CustomerCard({ customer, onClose, onUpdate }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(null)
@@ -42,6 +55,7 @@ export default function CustomerCard({ customer, onClose, onUpdate }) {
   }, [editing])
 
   const status = dueStatus(customer)
+  const pinNote = PIN_NOTE[pinConfirmCase(customer)]
   const commercial = isCommercial(customer)
   const days = daysUntilDue(customer)
   const dueLabel =
@@ -94,6 +108,9 @@ export default function CustomerCard({ customer, onClose, onUpdate }) {
       {!editing && (
         <>
           <Row label="Address">{customer.address}</Row>
+          {pinNote && (
+            <p className="-mt-1 pb-1 text-base font-semibold text-amber-700">{pinNote}</p>
+          )}
           <Row label="Phone">
             {customer.phone ? (
               <a href={`tel:${customer.phone}`} className="text-blue-700 underline">
