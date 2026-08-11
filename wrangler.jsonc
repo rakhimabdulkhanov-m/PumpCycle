@@ -32,6 +32,32 @@
         "limit": 3,
         "period": 60
       }
+    },
+    // Address lookups get their own budget. /api/lead is a stranger submitting
+    // one form, so 3/60s is generous there. Geocoding is an owner adding
+    // customers off a paper book during setup week: four new addresses in a
+    // minute is ordinary work, and sharing the lead budget would 429 him on the
+    // fourth behind copy that reads like his address was wrong.
+    {
+      "name": "GEOCODE_RATE_LIMITER",
+      "namespace_id": "9022",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
+    }
+  ],
+
+  // D1 databases. One entry per live tenant plus any non-production databases.
+  // binding = env key used in Worker code; database_name = D1 name in Cloudflare dashboard.
+  // migrations_dir is read by wrangler d1 migrations and by vitest-pool-workers (Miniflare)
+  // to apply the schema automatically in test runs.
+  "d1_databases": [
+    {
+      "binding": "DB_DEV",
+      "database_name": "pumpcycle-dev",
+      "database_id": "a8e4fbe3-fed7-4eea-8d58-3a928fc52634",
+      "migrations_dir": "migrations"
     }
   ]
 

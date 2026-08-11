@@ -1,5 +1,6 @@
 import { json } from './lib/json.js'
 import * as lead from './api/lead.js'
+import * as geocode from './api/geocode.js'
 
 /**
  * Explicit route table. Matching is on method AND path.
@@ -17,6 +18,12 @@ const ROUTES = [
     path: '/api/lead',
     demoOnly: true,
     methods: { POST: lead.post },
+  },
+  // Deliberately NOT demoOnly. Unlike /api/lead, address lookup is part of the
+  // product: the sales demo and a paying client both need it to add a customer.
+  {
+    path: '/api/geocode',
+    methods: { GET: geocode.get },
   },
 ]
 

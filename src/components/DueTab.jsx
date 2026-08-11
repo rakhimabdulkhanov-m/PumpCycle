@@ -81,6 +81,7 @@ export default function DueTab({
   onUpdateCustomer,
   onAddCustomer,
   onSetAvgJobPrice,
+  mapCenter,
 }) {
   const [filter, setFilter] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
@@ -220,6 +221,7 @@ export default function DueTab({
             setAdding(false)
           }}
           onClose={() => setAdding(false)}
+          mapCenter={mapCenter}
         />
       )}
     </div>

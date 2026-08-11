@@ -7,6 +7,8 @@ import DueTab from './components/DueTab.jsx'
 import RemindersTab from './components/RemindersTab.jsx'
 import { loadState, saveState } from './lib/storage.js'
 import { todayISO } from './lib/dates.js'
+import { stampAddressChange } from './lib/location.js'
+import { newCustomerId } from './lib/ids.js'
 
 function App() {
   const [tab, setTab] = useState('map')
@@ -38,10 +40,21 @@ function App() {
     const cycleChanged =
       patch.cycleMonths !== undefined && patch.cycleMonths !== prev?.cycleMonths
     const cycleReset = prev && (lastPumpedChanged || cycleChanged)
+    // A new address means the pin is at the OLD one. The coordinate is kept -
+    // the edit may have been a typo fix and the lid pin may still be right - but
+    // it stops counting as checked, so the customer shows up under "Needs a pin"
+    // and his card says why. Without this the operator drives to the pin: the
+    // verifier moved a confirmed customer from Dallas NC to Erie PA and the map
+    // still showed a settled pin in Dallas, 500 miles away.
+    //
+    // It lives in the write funnel rather than in the Edit form: every path that
+    // can change an address comes through here, so a second edit screen cannot
+    // forget the rule.
+    const finalPatch = stampAddressChange(prev, patch)
     const keep = (k) => !k.startsWith(`${id}:`)
     persist({
       ...data,
-      customers: data.customers.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+      customers: data.customers.map((c) => (c.id === id ? { ...c, ...finalPatch } : c)),
       sentReminders: cycleReset
         ? data.sentReminders.filter(keep)
         : data.sentReminders,
@@ -53,25 +66,23 @@ function App() {
 
   function addCustomer(fields) {
     // Strip the map-routing flags before persisting: they aren't customer data.
-    const { geocoded, revealPin, ...customerFields } = fields
+    const { geocoded, flyZoom, ...customerFields } = fields
     persist({
       ...data,
-      customers: [...data.customers, { ...customerFields, id: `c-${Date.now()}` }],
+      customers: [...data.customers, { ...customerFields, id: newCustomerId() }],
     })
     const { lat, lng } = customerFields
     if (geocoded) {
       // Switch to the map tab and fly to the geocoded address so the seller can
-      // see the yard on satellite and place/confirm the lid pin position.
-      // Zoom 19 puts a single residential yard in full view on satellite tiles.
-      setFlyTarget({ lat, lng, zoom: 19 })
+      // see the yard on satellite and place/confirm the lid pin position. How
+      // close depends on what was actually found: zoom 19 shows one yard, which
+      // is right for a house match and useless for a town match. The modal
+      // decides; App just carries it.
+      setFlyTarget({ lat, lng, zoom: flyZoom })
       setTab('map')
-    } else if (revealPin) {
-      // Geocode missed. Don't steal the tab (he may still be working the list),
-      // but leave a target so the map is centred on the fallback pin whenever he
-      // does open it - which is what the amber line just promised him. Zoom 15
-      // shows the pin plus enough streets around it to get his bearings.
-      setFlyTarget({ lat, lng, zoom: 15 })
     }
+    // No geocode means no pin and nowhere to fly. The map deliberately does not
+    // move: nothing was invented for it to move to.
   }
 
   function setAvgJobPrice(price) {
@@ -111,6 +122,9 @@ function App() {
             onUpdateCustomer={updateCustomer}
             onAddCustomer={addCustomer}
             onSetAvgJobPrice={setAvgJobPrice}
+            // Where the map is right now, so a geocode hit on the other side of
+            // the country comes back flagged instead of silently flying there.
+            mapCenter={mapView.center}
           />
         )}
         {tab === 'reminders' && (
