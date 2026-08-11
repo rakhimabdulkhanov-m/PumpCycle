@@ -41,8 +41,10 @@ const inputCls =
  */
 const PIN_NOTE = {
   no_location: 'No pin yet - open the map and place it on the lid.',
+  address_changed: 'Address was edited - the pin is still at the old one. Drag it onto the lid.',
   locality: 'Pin is town-level - drag it onto the lid.',
   road: 'Pin is road-level - drag it onto the lid.',
+  no_precision: 'Nobody has checked this pin - drag it onto the lid.',
 }
 
 export default function CustomerCard({ customer, onClose, onUpdate }) {

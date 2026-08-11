@@ -15,11 +15,64 @@ export const DEFAULT_ZOOM = 17
 export const zoomForPrecision = (precision) => ZOOM_BY_PRECISION[precision] || DEFAULT_ZOOM
 
 /**
+ * The precision labels that mean "this coordinate is as good as this app gets".
+ *
+ * A label the app does not recognise - including the empty string and a missing
+ * field - is NOT one of them, and that is the point. Coordinates with no
+ * precision at all are exactly what a hand-made import file carries, and they
+ * used to draw a solid pin that said nothing: 20 invented coordinates reached a
+ * real client's book that way and looked identical to 20 checked ones. An
+ * unlabelled coordinate is a claim nobody stands behind, so it is treated as
+ * unconfirmed until a human puts the pin on the lid. The demo seed carries
+ * 'house' for the same reason - if a coordinate is meant to look settled,
+ * something has to say why it is settled.
+ */
+const SETTLED_PRECISIONS = new Set(['house', 'house_approx', 'manual'])
+
+// Whitespace and letter case are not a new address: fixing "  Elm  St " to
+// "Elm St" is the same house, and flagging it would train the operator to
+// dismiss the flag. Anything else counts as a different address.
+const normalizeAddress = (a) => String(a ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
+
+/** True when these two address strings describe a genuinely different address. */
+export const isDifferentAddress = (a, b) => normalizeAddress(a) !== normalizeAddress(b)
+
+/**
+ * The half of an edit that says "the pin no longer belongs to this address".
+ *
+ * Given the customer as he is and the patch about to be applied to him, returns
+ * the patch unchanged, or the patch plus the moment the address moved. The
+ * coordinate is deliberately untouched: a typo fix leaves the lid pin exactly
+ * where it belongs, and throwing away a hand-placed pin over a corrected ZIP
+ * would cost the operator the one thing he cannot re-derive.
+ *
+ * Only for a customer who HAS a pin - one with no coordinates is already on the
+ * "Needs a pin" list under 'no_location' and a second reason changes nothing.
+ */
+export function stampAddressChange(prev, patch, now = Date.now()) {
+  if (!prev || patch.address === undefined) return patch
+  if (!hasLocation(prev)) return patch
+  if (!isDifferentAddress(prev.address, patch.address)) return patch
+  return { ...patch, addressChangedAt: now }
+}
+
+// A missing/garbage moment is "never happened", so the two comparisons below
+// stay a plain number comparison instead of a chain of null checks.
+const moment = (v) => (Number.isFinite(v) ? v : 0)
+
+/**
  * The one definition of "this pin is not settled yet".
  *
- * A customer needs his pin confirmed when he has no location at all, OR his
- * location came from a geocoder as a TOWN ('locality') or a STREET ('road') and
- * no human has since put the pin somewhere and accepted it.
+ * A customer needs his pin confirmed when:
+ *  - he has no location at all;
+ *  - his address was edited after the last time a human vouched for the pin -
+ *    the pin is still at the OLD address, which may be 500 miles away. The pin
+ *    is deliberately NOT deleted: the edit may have been a typo fix and the lid
+ *    pin may still be exactly right. It just stops claiming to be checked;
+ *  - his location came from a geocoder as a TOWN ('locality') or a STREET
+ *    ('road') and no human has since put the pin somewhere and accepted it;
+ *  - his location carries no precision label this app recognises, i.e. nothing
+ *    on the record says where the coordinate came from.
  *
  * Why a town centroid is stored at all: it is genuinely useful. It puts the map
  * in the right town so the pin can be panned onto the yard, which beats no pin.
@@ -32,13 +85,23 @@ export const zoomForPrecision = (precision) => ZOOM_BY_PRECISION[precision] || D
  * enough that flagging it would flag nearly every customer, and a warning
  * everybody ignores protects nobody. 'manual' is a human's own placement.
  *
- * @returns {'no_location'|'locality'|'road'|null} null = nothing to confirm
+ * locationConfirmedAt is a moment, not a flag, and the address check is why:
+ * manualLocationPatch stamps it at the moment the pin was dropped, so a later
+ * address edit is simply a bigger number and the pin goes back to unconfirmed.
+ * Dragging or re-confirming the pin stamps a bigger number again and clears it -
+ * no separate "acknowledge" path to keep in sync.
+ *
+ * @returns {'no_location'|'address_changed'|'locality'|'road'|'no_precision'|null}
+ *   null = nothing to confirm
  */
 export function pinConfirmCase(c) {
   if (!hasLocation(c)) return 'no_location'
-  if (c.locationConfirmedAt) return null
+  const confirmedAt = moment(c.locationConfirmedAt)
+  if (moment(c.addressChangedAt) > confirmedAt) return 'address_changed'
+  if (confirmedAt) return null
   const precision = c.locationPrecision
   if (precision === 'locality' || precision === 'road') return precision
+  if (!SETTLED_PRECISIONS.has(precision)) return 'no_precision'
   return null
 }
 
@@ -51,7 +114,9 @@ export const needsPinConfirmation = (c) => pinConfirmCase(c) !== null
  * keeps his name, phone, dates and reminders and is simply absent from the pin
  * layer until someone places his pin by hand. A customer with a town-level pin
  * is on the map but in the wrong place by up to a few miles, which is the same
- * job for the operator: put the pin on the lid.
+ * job for the operator: put the pin on the lid. So is a pin left behind by an
+ * address edit, and so is a coordinate that arrived with no label saying where
+ * it came from.
  */
 export function customersNeedingPin(customers) {
   return customers.filter(needsPinConfirmation)
@@ -65,6 +130,11 @@ export function customersNeedingPin(customers) {
  * on what "a human placed this" means. lat and lng always travel together, which
  * is the same rule the D1 schema enforces with
  * CHECK ((lat IS NULL) = (lng IS NULL)).
+ *
+ * This is also the only way any "needs a pin" flag clears, including the one an
+ * address edit raises: the fresh locationConfirmedAt is later than the moment of
+ * the edit, so pinConfirmCase goes quiet. There is no second acknowledge path
+ * that could disagree with this one.
  */
 export function manualLocationPatch(point, now = Date.now()) {
   return {

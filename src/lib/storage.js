@@ -1,6 +1,7 @@
 import seed from '../data/seed.json'
 import { todayISO, shiftISO, daysBetween } from './dates.js'
 import { isSanePoint } from './point.js'
+import { newCustomerId } from './ids.js'
 
 const KEY = 'pumpcycle-demo-v4'
 
@@ -68,7 +69,43 @@ function normalizeLocation(c) {
     // is nothing it could refer to, and leaving it set would make the customer
     // look settled the moment someone re-imports a location for him.
     locationConfirmedAt: located ? c.locationConfirmedAt ?? null : null,
+    // Same reasoning, other direction: "the address moved out from under this
+    // pin" is also a statement about a coordinate that no longer exists.
+    addressChangedAt: located ? c.addressChangedAt ?? null : null,
   }
+}
+
+/**
+ * No two customers may share an id after this.
+ *
+ * An id is the only thing that says which customer a pin placement belongs to,
+ * and updateCustomer patches EVERY customer whose id matches. The live build
+ * minted ids as `c-${Date.now()}`, so an operator's localStorage can already
+ * hold two customers with one id from a single import loop - and then placing a
+ * pin on one of them from the "Needs a pin" list wrote the coordinate onto both,
+ * both stamped manual and confirmed. Minting better ids from now on does not
+ * repair storage that already collided, so the repair happens on the way in,
+ * for the seed and for stored state alike.
+ *
+ * First occurrence keeps the id and every later claimant gets a fresh one, so
+ * nothing is dropped, nothing is reordered, and the customer the operator has
+ * already worked with keeps the id his reminder history is keyed by. A re-minted
+ * duplicate loses its `${id}:` reminder keys and may re-appear in the queue -
+ * those keys were ambiguous between the two rows anyway, and a reminder sent
+ * twice is a smaller failure than two customers that cannot be told apart.
+ */
+function withUniqueIds(customers) {
+  const seen = new Set()
+  return customers.map((c) => {
+    const id = c.id === undefined || c.id === null || c.id === '' ? null : c.id
+    if (id !== null && !seen.has(id)) {
+      seen.add(id)
+      return c
+    }
+    const fresh = newCustomerId()
+    seen.add(fresh)
+    return { ...c, id: fresh }
+  })
 }
 
 /**
@@ -100,9 +137,11 @@ export function loadState() {
     if (raw) {
       const stored = JSON.parse(raw)
       state = {
-        customers: shiftCustomers(
-          stored.customers || seed.customers,
-          daysBetween(stored.baseDate || SEED_BASE, today)
+        customers: withUniqueIds(
+          shiftCustomers(
+            stored.customers || seed.customers,
+            daysBetween(stored.baseDate || SEED_BASE, today)
+          )
         ),
         settings: { ...DEFAULT_SETTINGS, ...stored.settings },
         sentReminders: stored.sentReminders || [],
@@ -115,7 +154,7 @@ export function loadState() {
   }
   if (!state) {
     state = {
-      customers: shiftCustomers(seed.customers, daysBetween(SEED_BASE, today)),
+      customers: withUniqueIds(shiftCustomers(seed.customers, daysBetween(SEED_BASE, today))),
       settings: { ...DEFAULT_SETTINGS },
       sentReminders: [],
       sentAt: {},

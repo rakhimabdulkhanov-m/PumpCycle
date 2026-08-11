@@ -55,13 +55,17 @@ const UNCONFIRMED_ICONS = {
   ok: makeIcon(STATUS_COLORS.ok, { hollow: true }),
 }
 
-// What the "Needs a pin" list says about each row. Which of the two problems it
-// is decides what he does next: no pin means find the property from the address,
-// a town or road pin means pan a short way onto the right roof.
+// What the "Needs a pin" list says about each row. Which problem it is decides
+// what he does next: no pin means find the property from the address, a town or
+// road pin means pan a short way onto the right roof, a changed address means
+// the pin is at a house this customer no longer lives at, and an unchecked pin
+// means nothing on the record says where the coordinate came from.
 const PIN_CASE_LABEL = {
   no_location: 'No pin yet',
+  address_changed: 'Address changed - pin not moved',
   locality: 'Town-level pin',
   road: 'Road-level pin',
+  no_precision: 'Pin never checked',
 }
 
 // Blue draft pin — visually distinct from the red/yellow/green customer pins

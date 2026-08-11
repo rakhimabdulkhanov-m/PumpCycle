@@ -7,26 +7,8 @@ import DueTab from './components/DueTab.jsx'
 import RemindersTab from './components/RemindersTab.jsx'
 import { loadState, saveState } from './lib/storage.js'
 import { todayISO } from './lib/dates.js'
-
-/**
- * Ids must be unique, because they are the only thing that says which customer a
- * pin placement belongs to: updateCustomer patches EVERY customer whose id
- * matches, so two customers sharing one id are one customer with two rows on
- * screen. `c-${Date.now()}` collides whenever two are created in the same
- * millisecond, which is one paste of an import loop or two fast clicks.
- *
- * The 'c-' prefix stays so already-stored ids and the seed's c001.. keep working
- * unchanged; nothing parses what comes after it. randomUUID needs a secure
- * context (https or localhost), which production and the dev server both are;
- * the fallback exists so an http LAN address degrades to a near-unique id
- * instead of a TypeError in the middle of adding a customer.
- */
-function newCustomerId() {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `c-${crypto.randomUUID()}`
-  }
-  return `c-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
-}
+import { stampAddressChange } from './lib/location.js'
+import { newCustomerId } from './lib/ids.js'
 
 function App() {
   const [tab, setTab] = useState('map')
@@ -58,10 +40,21 @@ function App() {
     const cycleChanged =
       patch.cycleMonths !== undefined && patch.cycleMonths !== prev?.cycleMonths
     const cycleReset = prev && (lastPumpedChanged || cycleChanged)
+    // A new address means the pin is at the OLD one. The coordinate is kept -
+    // the edit may have been a typo fix and the lid pin may still be right - but
+    // it stops counting as checked, so the customer shows up under "Needs a pin"
+    // and his card says why. Without this the operator drives to the pin: the
+    // verifier moved a confirmed customer from Dallas NC to Erie PA and the map
+    // still showed a settled pin in Dallas, 500 miles away.
+    //
+    // It lives in the write funnel rather than in the Edit form: every path that
+    // can change an address comes through here, so a second edit screen cannot
+    // forget the rule.
+    const finalPatch = stampAddressChange(prev, patch)
     const keep = (k) => !k.startsWith(`${id}:`)
     persist({
       ...data,
-      customers: data.customers.map((c) => (c.id === id ? { ...c, ...patch } : c)),
+      customers: data.customers.map((c) => (c.id === id ? { ...c, ...finalPatch } : c)),
       sentReminders: cycleReset
         ? data.sentReminders.filter(keep)
         : data.sentReminders,

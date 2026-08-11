@@ -53,6 +53,12 @@ const loadOne = (customer) => {
   return loadState().customers[0]
 }
 
+// The same, for the cases that are about more than one customer.
+const loadMany = (customers) => {
+  saveState({ ...stored({}), customers })
+  return loadState().customers
+}
+
 describe('isSanePoint', () => {
   it('accepts a real point', () => {
     expect(isSanePoint(35.28, -81.17)).toBe(true)
@@ -70,9 +76,13 @@ describe('isSanePoint', () => {
     expect(isSanePoint(0, 0)).toBe(false)
   })
 
-  it('keeps a real coordinate that happens to sit on 0', () => {
-    expect(isSanePoint(0, -81.17)).toBe(true)
-    expect(isSanePoint(35.28, 0)).toBe(true)
+  it('rejects half a coordinate that landed on 0 - it is outside the US', () => {
+    // This used to pass as "a real coordinate that happens to sit on 0". It is
+    // not: (0, -81.17) is the Gulf of Guinea and (35.2, 0) is off Algeria, and
+    // both are what a spreadsheet cell containing 0 turns into. No US customer
+    // can be at either. See test/lib/point.test.js for the full rule.
+    expect(isSanePoint(0, -81.17)).toBe(false)
+    expect(isSanePoint(35.28, 0)).toBe(false)
   })
 })
 
@@ -93,6 +103,12 @@ describe('hasLocation', () => {
 
   it('is false for 0,0', () => {
     expect(hasLocation({ lat: 0, lng: 0 })).toBe(false)
+  })
+
+  it('is false for a coordinate outside the United States', () => {
+    expect(hasLocation({ lat: 0, lng: -81.17 })).toBe(false)
+    expect(hasLocation({ lat: 35.28, lng: 0 })).toBe(false)
+    expect(hasLocation({ lat: 48.85, lng: 2.35 })).toBe(false) // Paris
   })
 })
 
@@ -182,5 +198,121 @@ describe('loadState coordinate normalization', () => {
     const raw = JSON.parse(localStorage.getItem(KEY))
     expect(raw.customers[0].lat).toBeNull()
     expect(raw.customers[0].lng).toBeNull()
+  })
+
+  it('a coordinate outside the United States is dropped like an empty cell', () => {
+    for (const bad of [
+      { lat: 0, lng: -81.17 }, // Gulf of Guinea: lat cell was 0
+      { lat: 35.2, lng: 0 }, // off Algeria: lng cell was 0
+      { lat: '0', lng: '0' }, // the same, straight out of a CSV
+      { lat: -81.17, lng: 35.28 }, // lat and lng swapped: Indian Ocean
+      { lat: 51.5, lng: -0.12 }, // London
+      { lat: 19.43, lng: -99.13 }, // Mexico City
+    ]) {
+      const c = loadOne(bad)
+      expect([c.lat, c.lng]).toEqual([null, null])
+      expect(hasLocation(c)).toBe(false)
+    }
+  })
+
+  it('real US coordinates still load, including the far corners', () => {
+    for (const good of [
+      { lat: 35.3412, lng: -81.1893 }, // Gaston County NC
+      { lat: 40.31, lng: -75.13 }, // Bucks County PA
+      { lat: 61.2181, lng: -149.9003 }, // Anchorage AK
+      { lat: 21.3069, lng: -157.8583 }, // Honolulu HI
+      { lat: 18.4655, lng: -66.1057 }, // San Juan PR
+    ]) {
+      const c = loadOne(good)
+      expect([c.lat, c.lng]).toEqual([good.lat, good.lng])
+      expect(hasLocation(c)).toBe(true)
+    }
+  })
+
+  it('losing the coordinates also clears the address-changed flag', () => {
+    const c = loadOne({ lat: '', lng: '', addressChangedAt: 1750000000000 })
+    expect(c.addressChangedAt).toBeNull()
+  })
+
+  it('an address-changed flag on a real location survives a reload', () => {
+    const c = loadOne({ lat: 35.2, lng: -81.17, addressChangedAt: 1750000000000 })
+    expect(c.addressChangedAt).toBe(1750000000000)
+  })
+})
+
+// The build that shipped minted ids as `c-${Date.now()}`, so a real operator's
+// localStorage can already hold two customers with one id. updateCustomer
+// patches EVERY customer whose id matches, which is how placing one pin wrote
+// the coordinate onto two customers.
+describe('loadState id repair', () => {
+  const twin = (extra) => ({
+    id: 'c-1786000000000',
+    name: 'Twin',
+    address: '1 Main St',
+    phone: '',
+    email: '',
+    lat: null,
+    lng: null,
+    tankSizeGal: 1000,
+    lastPumped: todayISO(),
+    cycleMonths: 36,
+    notes: '',
+    ...extra,
+  })
+
+  it('two customers sharing an id do not both keep it', () => {
+    const out = loadMany([twin({ name: 'Earl' }), twin({ name: 'Wanda' })])
+    expect(out).toHaveLength(2)
+    expect(out[0].id).not.toBe(out[1].id)
+  })
+
+  it('the first keeps the id, so his reminder history still matches', () => {
+    const out = loadMany([twin({ name: 'Earl' }), twin({ name: 'Wanda' })])
+    expect(out[0].id).toBe('c-1786000000000')
+  })
+
+  it('nothing is lost and nothing is reordered', () => {
+    const out = loadMany([
+      twin({ name: 'Earl' }),
+      twin({ name: 'Wanda' }),
+      twin({ id: 'c002', name: 'Hoyle' }),
+      twin({ name: 'Sue' }),
+    ])
+    expect(out.map((c) => c.name)).toEqual(['Earl', 'Wanda', 'Hoyle', 'Sue'])
+    expect(new Set(out.map((c) => c.id)).size).toBe(4)
+  })
+
+  it('a patch by id now reaches exactly one customer', () => {
+    // What updateCustomer does. Before the repair this hit both twins.
+    const out = loadMany([twin({ name: 'Earl' }), twin({ name: 'Wanda' })])
+    const target = out[1].id
+    const patched = out.map((c) =>
+      c.id === target ? { ...c, lat: 35.28, lng: -81.17 } : c
+    )
+    expect(patched.filter((c) => c.lat !== null).map((c) => c.name)).toEqual(['Wanda'])
+  })
+
+  it('a customer with no id at all gets one', () => {
+    const out = loadMany([twin({ id: undefined }), twin({ id: '' }), twin({ id: null })])
+    expect(new Set(out.map((c) => c.id)).size).toBe(3)
+    for (const c of out) expect(typeof c.id === 'string' && c.id !== '').toBe(true)
+  })
+
+  it('everything else about the repaired customer is untouched', () => {
+    const out = loadMany([twin({ name: 'Earl' }), twin({ name: 'Wanda', phone: '(704) 922-4187' })])
+    expect(out[1].name).toBe('Wanda')
+    expect(out[1].phone).toBe('(704) 922-4187')
+    expect(out[1].cycleMonths).toBe(36)
+  })
+
+  it('the repair is written back, so the next load sees unique ids', () => {
+    loadMany([twin({ name: 'Earl' }), twin({ name: 'Wanda' })])
+    const raw = JSON.parse(localStorage.getItem(KEY))
+    expect(raw.customers[0].id).not.toBe(raw.customers[1].id)
+  })
+
+  it('leaves already-unique ids alone', () => {
+    const out = loadMany([twin({ id: 'c001' }), twin({ id: 'c002' })])
+    expect(out.map((c) => c.id)).toEqual(['c001', 'c002'])
   })
 })
