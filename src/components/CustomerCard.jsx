@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { nextDue, daysUntilDue, dueStatus, formatDate, todayISO, isCommercial } from '../lib/dates.js'
-import { pinConfirmCase } from '../lib/location.js'
+import { pinSource } from '../lib/location.js'
 
 const STATUS_STYLES = {
   overdue: 'bg-red-100 text-red-800',
@@ -35,19 +35,29 @@ const inputCls =
 
 /**
  * One line, no banner. The card is what he reads before driving out, so it is
- * the last honest moment to say "this pin was never checked" - a town centroid
- * can be several miles from the yard. A banner would be shouting; a line under
- * the address is read at the same time as the address.
+ * the last honest moment to say where this pin came from - a town centroid can
+ * be several miles from the yard, and a pin he put on the lid himself is worth
+ * knowing about too, because it is the one he can trust. A banner would be
+ * shouting; a line under the address is read at the same time as the address.
+ *
+ * The five unsettled cases are pinConfirmCase's, unchanged in meaning; only the
+ * instruction moved, because pins are no longer dragged. "Move pin" below is the
+ * one way to fix any of them.
  */
 const PIN_NOTE = {
-  no_location: 'No pin yet - open the map and place it on the lid.',
-  address_changed: 'Address was edited - the pin is still at the old one. Drag it onto the lid.',
-  locality: 'Pin is town-level - drag it onto the lid.',
-  road: 'Pin is road-level - drag it onto the lid.',
-  no_precision: 'Nobody has checked this pin - drag it onto the lid.',
+  no_location: 'No pin yet - place it on the lid.',
+  address_changed: 'Address was edited - the pin is still at the old one.',
+  locality: 'Pin is town-level - nobody has put it on the lid.',
+  road: 'Pin is road-level - nobody has put it on the lid.',
+  no_precision: 'Nobody has checked this pin.',
+  placed: 'Pin placed by you on the lid.',
+  lookup: 'Pin from the address lookup.',
 }
 
-export default function CustomerCard({ customer, onClose, onUpdate }) {
+// The two settled cases are not a warning, so they are not dressed as one.
+const SETTLED_NOTE = new Set(['placed', 'lookup'])
+
+export default function CustomerCard({ customer, onClose, onUpdate, onMovePin }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(null)
   const bodyRef = useRef(null)
@@ -57,7 +67,9 @@ export default function CustomerCard({ customer, onClose, onUpdate }) {
   }, [editing])
 
   const status = dueStatus(customer)
-  const pinNote = PIN_NOTE[pinConfirmCase(customer)]
+  const source = pinSource(customer)
+  const pinNote = PIN_NOTE[source]
+  const hasPin = source !== 'no_location'
   const commercial = isCommercial(customer)
   const days = daysUntilDue(customer)
   const dueLabel =
@@ -110,9 +122,14 @@ export default function CustomerCard({ customer, onClose, onUpdate }) {
       {!editing && (
         <>
           <Row label="Address">{customer.address}</Row>
-          {pinNote && (
-            <p className="-mt-1 pb-1 text-base font-semibold text-amber-700">{pinNote}</p>
-          )}
+          <p
+            className={
+              '-mt-1 pb-1 text-base font-semibold ' +
+              (SETTLED_NOTE.has(source) ? 'text-gray-500' : 'text-amber-700')
+            }
+          >
+            {pinNote}
+          </p>
           <Row label="Phone">
             {customer.phone ? (
               <a href={`tel:${customer.phone}`} className="text-blue-700 underline">
@@ -180,6 +197,18 @@ export default function CustomerCard({ customer, onClose, onUpdate }) {
             >
               Mark pumped today
             </button>
+            {/* The one entrance to placing or moving a pin: named, and pressed on
+                purpose. Nothing on the map itself can start it, which is why a
+                pan can no longer move a customer's lid. Absent on the Due tab,
+                where this card opens with no map behind it to aim on. */}
+            {onMovePin && (
+              <button
+                onClick={onMovePin}
+                className="w-full rounded-lg bg-blue-700 px-4 py-3 text-lg font-semibold text-white hover:bg-blue-800"
+              >
+                {hasPin ? 'Move pin' : 'Place pin'}
+              </button>
+            )}
             <button
               onClick={startEdit}
               className="w-full rounded-lg border-2 border-gray-300 px-4 py-3 text-lg font-semibold text-gray-700 hover:bg-gray-100"

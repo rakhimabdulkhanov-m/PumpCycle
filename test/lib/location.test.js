@@ -289,8 +289,8 @@ describe('manualLocationPatch', () => {
   })
 
   it('ignores anything else carried on the point object', () => {
-    // MapTab's draft pin also carries `placed`, which is UI state and must not
-    // reach the customer record.
+    // Callers hand it whatever point object they are holding; anything on it
+    // that is not a coordinate is UI state and must not reach the record.
     const patch = manualLocationPatch({ lat: 1, lng: 2, placed: true })
     expect('placed' in patch).toBe(false)
   })
