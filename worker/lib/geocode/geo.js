@@ -27,7 +27,15 @@ export function haversineKm(lat1, lng1, lat2, lng2) {
  *
  * Deliberately the byte-for-byte twin of isSanePoint in src/lib/point.js, which
  * drops the same junk again on the way out of localStorage and out of a fetch.
- * If one of the two ever changes, change the other.
+ * Migration 0002 puts the same boxes into the database as a CHECK constraint.
+ * If one of the three ever changes, change the other two.
+ *
+ * The three agree about which POINTS are real, not about types. D1 gives lat/lng
+ * REAL affinity, so ('35.2','-81.17') is converted and stored where this function
+ * rejects it for not being a number. That admits no point this rule excludes - a
+ * string that is not a number stays text and still fails the boxes - but a writer
+ * that hands D1 strings would be storing what this function would have dropped.
+ * Pinned by a test in test/worker/schema-0002.test.js.
  *
  * The boxes are coarse on purpose. They are a junk filter, not a service area:
  * the first box also covers southern Ontario and northern Mexico, and that is

@@ -89,7 +89,10 @@ describe('Migration ladder', () => {
 // 2. lat/lng CHECK constraints and NaN/non-finite behaviour
 // ---------------------------------------------------------------------------
 describe('lat / lng CHECK constraints', () => {
-  it('lat = 91 is rejected (CHECK lat BETWEEN -90 AND 90)', async () => {
+  // These four still pass unchanged after 0002 - out-of-globe values were junk
+  // under the old check and are still junk under the US-box check. Only the
+  // parenthetical reason is updated: the BETWEEN constraints no longer exist.
+  it('lat = 91 is rejected (outside every US box)', async () => {
     const threw = await expectThrow(
       `INSERT INTO customers (id, lat, lng, created_at, updated_at, seq) VALUES (?,?,?,?,?,?)`,
       'lat-91', 91, -80.0, 1, 1, 999
@@ -105,7 +108,7 @@ describe('lat / lng CHECK constraints', () => {
     expect(threw).toBe(true)
   })
 
-  it('lng = -181 is rejected (CHECK lng BETWEEN -180 AND 180)', async () => {
+  it('lng = -181 is rejected (outside every US box)', async () => {
     const threw = await expectThrow(
       `INSERT INTO customers (id, lat, lng, created_at, updated_at, seq) VALUES (?,?,?,?,?,?)`,
       'lng-neg181', 35.0, -181, 1, 1, 999
@@ -121,16 +124,47 @@ describe('lat / lng CHECK constraints', () => {
     expect(threw).toBe(true)
   })
 
-  it('valid lat/lng at boundaries are accepted: lat=-90, lng=180', async () => {
-    // Boundary values are part of BETWEEN (inclusive).
-    await env.DB_DEV.prepare(
-      `INSERT INTO customers (id, lat, lng, created_at, updated_at, seq) VALUES (?,?,?,?,?,?)`
+  /**
+   * CHANGED BY MIGRATION 0002, deliberately, and worth reading before trusting.
+   *
+   * This test used to insert (-90, 180) and assert it was ACCEPTED, because
+   * 0001 checked `lat BETWEEN -90 AND 90` / `lng BETWEEN -180 AND 180` and the
+   * bounds of BETWEEN are inclusive. (-90, 180) is in the Southern Ocean. It was
+   * never a customer - it was only ever a demonstration that the globe-wide
+   * check let anything through, which is the bug 0002 exists to fix.
+   *
+   * So the old expectation is what became wrong, not the new constraint. The
+   * point of the US-box rule is that the client (src/lib/point.js), the Worker
+   * (worker/lib/geocode/geo.js) and the database cannot disagree about what a
+   * real coordinate is; a database still accepting (-90, 180) would be the one
+   * of the three that disagreed. The original intent - "the bounds are
+   * inclusive" - is kept below, against the bounds that are actually in force.
+   */
+  it('the corners of the US boxes are accepted (the bounds are inclusive)', async () => {
+    const corners = [
+      ['corner-sw-48', 24.4, -125.0],
+      ['corner-ne-48', 49.4, -66.9],
+      ['corner-sw-pr', 17.6, -67.4],
+      ['corner-ne-ak', 71.6, -129.0],
+    ]
+    for (const [id, lat, lng] of corners) {
+      await env.DB_DEV.prepare(
+        `INSERT INTO customers (id, lat, lng, created_at, updated_at, seq) VALUES (?,?,?,?,?,?)`
+      )
+        .bind(id, lat, lng, 1, 1, 9990)
+        .run()
+      const rows = await all(`SELECT lat, lng FROM customers WHERE id = ?`, id)
+      expect(rows[0].lat).toBe(lat)
+      expect(rows[0].lng).toBe(lng)
+    }
+  })
+
+  it('(-90, 180) is rejected since 0002, having been accepted under 0001', async () => {
+    const threw = await expectThrow(
+      `INSERT INTO customers (id, lat, lng, created_at, updated_at, seq) VALUES (?,?,?,?,?,?)`,
+      'lat-boundary', -90, 180, 1, 1, 9990
     )
-      .bind('lat-boundary', -90, 180, 1, 1, 9990)
-      .run()
-    const rows = await all(`SELECT lat, lng FROM customers WHERE id = 'lat-boundary'`)
-    expect(rows[0].lat).toBe(-90)
-    expect(rows[0].lng).toBe(180)
+    expect(threw).toBe(true)
   })
 
   /**

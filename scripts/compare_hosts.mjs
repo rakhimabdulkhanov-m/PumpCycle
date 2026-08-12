@@ -186,13 +186,72 @@ for (const p of ['/api/lead', '/api/nope', '/api']) {
   else pass(`B ${p} ${r.status} cache-control: ${cc}`)
 }
 
+// ------------------------------------------------------------------- /api/bootstrap
+// The endpoint that decides, server-side, whether the front end boots as the demo or as a
+// real client's book. If it answered "demo" on a client host the shell would come up as the
+// sales demo on a hostname someone is paying for, and if it answered "live" on the demo it
+// would come up as an empty book on the marketing site. Neither shows up in a status check,
+// so it is asserted here.
+//
+// Only B is checked, not A: A is the known-good REFERENCE and may be an older deploy from
+// before this route existed, in which case it answers 404 and that is not a regression.
+//
+// The body is asserted as an EXACT key set. There is no auth in front of this yet, so the
+// failure to catch is a field ADDED later - a customer count, a name, anything that turns a
+// public endpoint into a leak on a client's hostname.
+const BOOTSTRAP_KEYS = ['company', 'mode', 'ok', 'timezone']
+
+async function checkBootstrap(origin, label, wantMode) {
+  const r = await get(`${origin}/api/bootstrap`)
+  const ct = (r.headers.get('content-type') || '').split(';')[0]
+  const text = r.body.toString('utf8')
+
+  if (r.status !== 200) return fail(`${label} GET /api/bootstrap ${r.status} ${ct} ${text.slice(0, 120)}, want 200`)
+  if (ct !== 'application/json') return fail(`${label} GET /api/bootstrap content-type "${ct}", want application/json`)
+  if ((r.headers.get('cache-control') || '') !== CACHE_CONTROL)
+    return fail(`${label} GET /api/bootstrap cache-control "${r.headers.get('cache-control')}", want "${CACHE_CONTROL}"`)
+
+  let body
+  try {
+    body = JSON.parse(text)
+  } catch {
+    return fail(`${label} GET /api/bootstrap body is not JSON: ${text.slice(0, 120)}`)
+  }
+  if (body.mode !== wantMode)
+    return fail(`${label} GET /api/bootstrap mode "${body.mode}", want "${wantMode}"`)
+
+  const keys = Object.keys(body).sort()
+  if (keys.join(',') !== BOOTSTRAP_KEYS.join(','))
+    return fail(
+      `${label} GET /api/bootstrap returns keys [${keys}], want exactly [${BOOTSTRAP_KEYS}] - ` +
+        `this endpoint is unauthenticated, so a new field here is public`
+    )
+
+  // Wrong method must still be a 405 with Allow, not a fall-through to the SPA shell.
+  const post = await get(`${origin}/api/bootstrap`, { method: 'POST' })
+  if (post.status !== 405) return fail(`${label} POST /api/bootstrap ${post.status}, want 405`)
+  if (post.headers.get('allow') !== 'GET')
+    return fail(`${label} POST /api/bootstrap 405 but allow="${post.headers.get('allow')}", want GET`)
+
+  pass(`${label} GET /api/bootstrap 200 mode=${body.mode} company="${body.company}" keys=[${keys}]`)
+}
+
+console.log('\n/api/bootstrap mode reporting')
+await checkBootstrap(B, 'B (demo)', 'demo')
+
 // -------------------------------------------------------------- live tenant host (opt in)
 // A paying client's hostname serves the same SPA shell from the same build, but its /api
-// must behave completely differently: /api/lead does not exist there (demoOnly -> 404) and,
-// while the host is not yet in LIVE_TENANTS with its bindings, every /api path fails closed
-// with 503. Two things must never appear under /api on a client host: a 200 (the demo's
-// unauthenticated endpoints would be reachable on it) or an HTML body (the assets layer
-// answered, meaning run_worker_first has stopped covering /api and the API is a 200 shell).
+// must behave completely differently: /api/lead does not exist there (demoOnly -> 404) and
+// an unmapped or unbound host fails closed with 503.
+//
+// The probes below are exactly the paths that must NEVER answer 200 on a client host. That
+// is not the same as "no /api path may answer 200": since app.pumpcycle.net became a
+// resolved tenant, GET /api/bootstrap answers 200 there on purpose - it is how the shell
+// learns it is live rather than the demo. Keep that path out of this list, and keep any
+// path that returns tenant DATA out of it too, by not having such a path without auth.
+// Two things must never appear on the probes below: a 200 (a demo-only or unmapped-host
+// endpoint answered on a client host) or an HTML body (the assets layer answered, meaning
+// run_worker_first has stopped covering /api and the API is a 200 shell).
 if (LIVE_HOST) {
   console.log(`\nlive tenant host ${LIVE_HOST}`)
 
@@ -201,6 +260,13 @@ if (LIVE_HOST) {
   else if (root.hash !== indexHash)
     fail(`live / body ${short(root.hash)} != A index.html ${short(indexHash)}`)
   else pass(`live / 200, same index.html ${short(root.hash)}`)
+
+  // The client host serves the SAME index.html as the demo, byte for byte - the check
+  // just above asserts it. So the ONLY thing that makes it come up as a client's book
+  // rather than as the sales demo is this endpoint's answer. If it said "demo" here, a
+  // hostname someone is paying for would boot as the demo and nothing else in this
+  // script would notice.
+  await checkBootstrap(LIVE_HOST, 'live', 'live')
 
   // The honeypot field is set on the POST so that if the demoOnly gate were ever broken,
   // this probe still could not put a message into Telegram.

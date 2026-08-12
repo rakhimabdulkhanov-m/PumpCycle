@@ -3,10 +3,13 @@
  * migrate.mjs - apply pending D1 schema migrations to one named tenant.
  *
  * Usage:
- *   node scripts/migrate.mjs --tenant=dev [--local] [--dry-run]
+ *   node scripts/migrate.mjs --tenant=dev [--local] [--dry-run] [--persist-to=DIR]
  *
  * --tenant   REQUIRED. Tenant key from scripts/tenants.config.mjs.
  * --local    Run against the local wrangler dev database instead of the remote.
+ * --persist-to=DIR  With --local only. Use DIR instead of ./.wrangler/state, so a
+ *            migration can be rehearsed end to end against a throwaway copy
+ *            without disturbing the database `wrangler dev` is using.
  * --dry-run  Print what would be applied and exit 0 WITHOUT writing anything.
  *            It still reads the database and still runs every safety check
  *            below, so it exits 1 on a check that fails. A dry run that skipped
@@ -31,10 +34,11 @@
  */
 
 import { createHash } from 'crypto'
-import { readdirSync, readFileSync } from 'fs'
+import { readFileSync } from 'fs'
 import { spawnSync } from 'child_process'
 import { resolve, join, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import { scanMigrations as scanMigrationDir, duplicateMigrationNumbers } from './deploy_checks.mjs'
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -57,6 +61,13 @@ const args = process.argv.slice(2)
 const tenantArg = args.find((a) => a.startsWith('--tenant='))
 const local = args.includes('--local')
 const dryRun = args.includes('--dry-run')
+const persistArg = args.find((a) => a.startsWith('--persist-to='))
+const persistTo = persistArg ? persistArg.slice('--persist-to='.length).trim() : ''
+
+if (persistTo && !local) {
+  console.error('ERROR: --persist-to only means anything with --local.')
+  process.exit(1)
+}
 
 if (!tenantArg) {
   console.error('ERROR: --tenant=<name> is required.')
@@ -90,6 +101,10 @@ console.log()
 // ---------------------------------------------------------------------------
 // Wrangler helpers
 // ---------------------------------------------------------------------------
+function persistFlag() {
+  return persistTo ? ['--persist-to', persistTo] : []
+}
+
 function wranglerRun(wArgs) {
   return spawnSync(process.execPath, [WRANGLER_JS, ...wArgs], {
     encoding: 'utf8',
@@ -109,7 +124,7 @@ function wranglerRun(wArgs) {
  */
 function wranglerQuery(sql) {
   const wArgs = ['d1', 'execute', dbname, '--command', sql, '--json']
-  if (local) wArgs.push('--local')
+  if (local) wArgs.push('--local', ...persistFlag())
   else wArgs.push('--remote')
   const result = wranglerRun(wArgs)
   if (result.error) throw result.error
@@ -141,7 +156,7 @@ function wranglerQuery(sql) {
 
 function wranglerExecuteFile(filePath) {
   const wArgs = ['d1', 'execute', dbname, '--file', filePath]
-  if (local) wArgs.push('--local')
+  if (local) wArgs.push('--local', ...persistFlag())
   else wArgs.push('--remote')
   const result = wranglerRun(wArgs)
   if (result.error) throw result.error
@@ -154,7 +169,7 @@ function wranglerExecuteFile(filePath) {
 
 function wranglerExecuteSQL(sql) {
   const wArgs = ['d1', 'execute', dbname, '--command', sql]
-  if (local) wArgs.push('--local')
+  if (local) wArgs.push('--local', ...persistFlag())
   else wArgs.push('--remote')
   const result = wranglerRun(wArgs)
   if (result.error) throw result.error
@@ -168,22 +183,16 @@ function wranglerExecuteSQL(sql) {
 // ---------------------------------------------------------------------------
 // Scan migration files
 // ---------------------------------------------------------------------------
+// Shared with preflight.mjs on purpose: "the version a run records" and "the
+// version a deploy expects" are two halves of one contract and must not be two
+// implementations.
 function scanMigrations() {
-  let files
-  try {
-    files = readdirSync(MIGRATIONS_DIR)
-  } catch {
+  const migrations = scanMigrationDir(MIGRATIONS_DIR)
+  if (migrations === null) {
     console.error(`ERROR: Cannot read migrations directory: ${MIGRATIONS_DIR}`)
     process.exit(1)
   }
-  return files
-    .filter((f) => /^\d{4}_.*\.sql$/.test(f))
-    .sort()
-    .map((f) => {
-      const num = parseInt(f.split('_')[0], 10)
-      const path = join(MIGRATIONS_DIR, f)
-      return { num, name: f, path }
-    })
+  return migrations
 }
 
 // ---------------------------------------------------------------------------
@@ -229,6 +238,47 @@ function getStoredHashes() {
 }
 
 // ---------------------------------------------------------------------------
+// Import flags written BY a migration
+//
+// A migration can decide that some stored value is not salvageable - 0002 drops
+// coordinates that are outside the US boxes, because the new CHECK is exactly
+// what says they are junk. It records each one in import_flags so the change is
+// not silent. But "recorded in a table" is only not-silent if something reads
+// the table, and today nothing does: the in-app import-review screen is deferred,
+// and no endpoint or script touches those rows.
+//
+// This is the one place a human is already standing at the moment it happens, so
+// this is where it gets said. Nothing here knows anything about 0002 - it reports
+// whatever flags the run wrote, whichever migration wrote them.
+// ---------------------------------------------------------------------------
+function highestImportFlagId() {
+  // A database at version 0 has no import_flags table yet; that reads as "no
+  // flags existed", which is exactly right.
+  const { missingTable, rows } = wranglerQuery('SELECT MAX(id) AS max_id FROM import_flags')
+  if (missingTable || rows.length === 0) return 0
+  return rows[0].max_id ?? 0
+}
+
+function reportNewImportFlags(sinceId) {
+  const { missingTable, rows } = wranglerQuery(
+    `SELECT customer_id, field, severity, message FROM import_flags` +
+      ` WHERE id > ${Number(sinceId) || 0} ORDER BY id`
+  )
+  if (missingTable || rows.length === 0) return // silent when there is nothing to say
+
+  console.log()
+  console.log(`${rows.length} row(s) were flagged by this migration:`)
+  for (const r of rows) {
+    console.log(`  [${r.severity}] customer ${r.customer_id} (${r.field}): ${r.message}`)
+  }
+  console.log()
+  console.log(
+    'These are recorded in the import_flags table. Nothing in the app surfaces them yet,'
+  )
+  console.log('so this printout is the notification - copy it somewhere before it scrolls away.')
+}
+
+// ---------------------------------------------------------------------------
 // Upsert schema_meta and migration_hashes after applying migrations
 // ---------------------------------------------------------------------------
 function recordApplied(version, hashes) {
@@ -270,12 +320,7 @@ if (migrations.length === 0) {
 // which is a different accident with a different fix and sends whoever reads it
 // looking for an edit that never happened.
 // ---------------------------------------------------------------------------
-const byNum = new Map()
-for (const m of migrations) {
-  if (!byNum.has(m.num)) byNum.set(m.num, [])
-  byNum.get(m.num).push(m.name)
-}
-const duplicates = [...byNum.entries()].filter(([, names]) => names.length > 1)
+const duplicates = duplicateMigrationNumbers(MIGRATIONS_DIR)
 if (duplicates.length > 0) {
   for (const [num, names] of duplicates) {
     console.error(
@@ -369,6 +414,12 @@ console.log(`Applying ${pending.length} migration(s)...`)
 const storedHashes = getStoredHashes()
 const hashesMap = new Map(storedHashes.map((h) => [h.num, h.sha256]))
 
+// Highest import_flags id before anything is applied, so the flags this run
+// writes can be told from the ones that were already there. Clock-independent,
+// unlike comparing created_at against this machine's Date.now(); import_flags.id
+// is INTEGER PRIMARY KEY AUTOINCREMENT.
+const flagsBefore = highestImportFlagId()
+
 for (const m of pending) {
   console.log(`  Applying: ${m.name}`)
   wranglerExecuteFile(m.path)
@@ -386,3 +437,5 @@ recordApplied(newVersion, allHashes)
 
 console.log()
 console.log(`Schema version is now: ${newVersion}`)
+
+reportNewImportFlags(flagsBefore)

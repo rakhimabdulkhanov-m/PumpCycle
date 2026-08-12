@@ -9,6 +9,22 @@ Loaded on top of the root CLAUDE.md. Covers only what matters when editing Worke
 - `lib/json.js` - the only place a JSON Response is constructed
 - `api/` - one file per endpoint (e.g. api/lead.js)
 
+## Tenants in force
+`app.pumpcycle.net` is a live tenant on the `DB_DEV` binding (database `pumpcycle-dev`).
+It is the greenfield validation host - risky things are proved there before `demo.` or a
+paying client's hostname is touched. Everything else (`demo.`, the apex, `www.`,
+`localhost`, `127.0.0.1`, `*.workers.dev`) is demo. Anything else is `unknown` -> 503.
+
+## /api/bootstrap
+`GET /api/bootstrap` is how the front end learns whether it is the demo or a real client's
+book. The client must never sniff `location.hostname` for this. It exists on both demo and
+live hosts and returns `{ ok, mode, company, timezone }` - the mode plus display config,
+and nothing else.
+
+There is no auth in front of it yet, so it must stay safe for a stranger to fetch on a
+paying client's hostname: no customers, no counts, no binding names. Adding tenant data to
+it is how a client's book becomes public.
+
 ## Router rules
 The route table matches on **method and path both**.
 
