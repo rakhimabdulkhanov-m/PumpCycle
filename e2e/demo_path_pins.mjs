@@ -423,6 +423,135 @@ await page.locator('.leaflet-marker-icon').first().click()
 await page.waitForTimeout(600)
 check('the card says why', (await page.locator('text=Nobody has checked this pin').count()) === 1)
 
+// ------------------------------------------------------------------- fix 5
+// The verifier's exact sequence. Undo used to carry the address-changed flag in
+// its snapshot, so an address edit made inside the ten seconds was reverted
+// along with the pin: the app forgot the customer had moved to another state,
+// dropped him off "Needs a pin" and drew a solid pin 500 miles from his house.
+console.log('\n--- fix 5: undo puts the PIN back and leaves a later address edit standing ---')
+const earl = () => byName('Earl Whitener')
+await seed([
+  person({
+    id: 'c001',
+    name: 'Earl Whitener',
+    address: '1184 Philadelphia Church Rd, Dallas, NC 28034',
+    lat: 35.3412,
+    lng: -81.1893,
+    locationPrecision: 'manual',
+    locationConfirmedAt: 1750000000000,
+  }),
+])
+await page.locator('.leaflet-marker-icon').first().click()
+await page.waitForTimeout(600)
+await page.getByRole('button', { name: 'Move pin' }).click()
+await page.waitForTimeout(1200)
+await page.mouse.move(500, 350)
+await page.mouse.down()
+await page.mouse.move(560, 420, { steps: 10 })
+await page.mouse.up()
+await page.waitForTimeout(800)
+await page.getByRole('button', { name: 'Save pin here' }).click()
+await page.waitForTimeout(700)
+const movedPin = await earl()
+check('the pin moved and is stamped manual', movedPin.locationPrecision === 'manual' && movedPin.lat !== 35.3412, `${movedPin.lat},${movedPin.lng}`)
+check('the confirmation offers an undo', (await page.getByRole('button', { name: 'Undo' }).count()) === 1)
+// Inside the ten seconds he opens the card and corrects the address to a house
+// in another state - a real thing that happens when a customer moves.
+await page.locator('.leaflet-marker-icon').first().click()
+await page.waitForTimeout(500)
+await page.getByRole('button', { name: 'Edit' }).click()
+await page.waitForTimeout(400)
+await page.locator('label').filter({ hasText: 'Address' }).locator('input')
+  .fill('999 Faraway Rd, Erie, PA 16501')
+await page.getByRole('button', { name: 'Save', exact: true }).click()
+await page.waitForTimeout(600)
+await page.locator('button[aria-label="Close"]').first().click()
+await page.waitForTimeout(300)
+check('the undo is still on screen', (await page.getByRole('button', { name: 'Undo' }).count()) === 1)
+await page.getByRole('button', { name: 'Undo' }).click()
+await page.waitForTimeout(900)
+const back = await earl()
+check('the pin is back exactly where it was', back.lat === 35.3412 && back.lng === -81.1893, `${back.lat},${back.lng}`)
+check('and so is the moment a human vouched for it', back.locationConfirmedAt === 1750000000000, String(back.locationConfirmedAt))
+check('the address edit still stands', back.address === '999 Faraway Rd, Erie, PA 16501', back.address)
+check(
+  'the app still knows the address moved out from under the pin',
+  Number.isFinite(back.addressChangedAt) && back.addressChangedAt > back.locationConfirmedAt,
+  JSON.stringify({ addressChangedAt: back.addressChangedAt, locationConfirmedAt: back.locationConfirmedAt })
+)
+check('he is back on "Needs a pin"', (await page.locator('button', { hasText: 'Needs a pin (1)' }).count()) === 1)
+check('and his pin draws unconfirmed', (await hollowCount()) === 1, `${await hollowCount()} hollow`)
+await page.locator('.leaflet-marker-icon').first().click()
+await page.waitForTimeout(600)
+check('the card says the address was edited', (await page.locator('text=Address was edited').count()) === 1)
+check(
+  'and it does not claim the pin came from an address lookup',
+  (await page.locator('text=Pin from the address lookup').count()) === 0
+)
+await page.locator('button[aria-label="Close"]').first().click()
+await page.waitForTimeout(300)
+
+// ------------------------------------------------------------------- fix 6
+// MIN_PLACEMENT_ZOOM only set the view placement OPENED on. Afterwards the map
+// was his, and PLACEMENT_MOVE_METERS is 2 m - a sub-pixel nudge at zoom 9 - so
+// 'manual', the highest trust level in the app, could be stamped on a point
+// 21 km away from a view where no lid is visible at all.
+console.log('\n--- fix 6: no manual pin from a zoom where no lid is visible ---')
+await seed([
+  person({
+    id: 'c001',
+    name: 'Earl Whitener',
+    address: '1184 Philadelphia Church Rd, Dallas, NC 28034',
+    lat: 35.3412,
+    lng: -81.1893,
+    locationPrecision: 'manual',
+    locationConfirmedAt: 1750000000000,
+  }),
+])
+await page.locator('.leaflet-marker-icon').first().click()
+await page.waitForTimeout(600)
+await page.getByRole('button', { name: 'Move pin' }).click()
+await page.waitForTimeout(1200)
+check('placement opens close enough to see a lid', (await view()).zoom >= 18, `zoom ${(await view()).zoom}`)
+check('and Save is open on a settled pin, as before', (await page.getByRole('button', { name: 'Save pin here' }).count()) === 1)
+// He zooms out to a whole county and nudges the map, which is all the old rule
+// asked for.
+await page.evaluate(() => window.__map.setZoom(9))
+await page.waitForTimeout(900)
+await page.mouse.move(500, 350)
+await page.mouse.down()
+await page.mouse.move(620, 430, { steps: 10 })
+await page.mouse.up()
+await page.waitForTimeout(900)
+const farOut = await view()
+check('he is out at county zoom with the map moved', farOut.zoom === 9, `zoom ${farOut.zoom}`)
+const zoomBtn = page.getByRole('button', { name: 'Zoom in until you can see the lid' })
+check('Save is shut and says the one thing he has to do', (await zoomBtn.count()) === 1)
+check('and it really is disabled, not just relabelled', (await zoomBtn.count()) === 1 && (await zoomBtn.isDisabled()))
+await zoomBtn.click({ force: true }).catch(() => {})
+await page.waitForTimeout(600)
+const notStamped = await earl()
+check(
+  'pressing it writes nothing at all',
+  notStamped.lat === 35.3412 && notStamped.lng === -81.1893 && notStamped.locationConfirmedAt === 1750000000000,
+  JSON.stringify([notStamped.lat, notStamped.lng, notStamped.locationConfirmedAt])
+)
+// Back in close, the aiming he already did still counts - he is not made to
+// re-pan for having looked at the surroundings.
+await page.evaluate(() => window.__map.setZoom(19))
+await page.waitForTimeout(1400)
+check('Save re-opens by itself once he is back in close', (await page.getByRole('button', { name: 'Save pin here' }).count()) === 1)
+const aimed = await view()
+await page.getByRole('button', { name: 'Save pin here' }).click()
+await page.waitForTimeout(900)
+const stamped = await earl()
+check('and now it writes', stamped.locationPrecision === 'manual' && stamped.locationConfirmedAt !== 1750000000000)
+check(
+  'what was under the crosshair at the zoom he could see it from',
+  Math.abs(stamped.lat - aimed.center[0]) < 0.0005 && Math.abs(stamped.lng - aimed.center[1]) < 0.0005,
+  `${stamped.lat},${stamped.lng} vs crosshair ${aimed.center}`
+)
+
 // ------------------------------------------------------------- demo, again
 console.log('\n--- fix 4 must not break the demo: fresh load, empty storage ---')
 await page.evaluate((k) => localStorage.removeItem(k), KEY)

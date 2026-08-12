@@ -9,6 +9,7 @@ import {
   pinConfirmCase,
   pinSnapshot,
   pinSource,
+  placementSaveBlock,
   placementView,
 } from '../../src/lib/location.js'
 import { updateCustomerState } from '../../src/lib/customers.js'
@@ -91,17 +92,72 @@ describe('placementView - he cannot save a pin he cannot see', () => {
 })
 
 describe('canSavePlacement', () => {
+  // The zoom placement opens at, i.e. what the map says for the whole ordinary
+  // path: open, pan a little, Save.
+  const close = { zoom: 19 }
+
   it('an unconfirmable start needs the map to have moved', () => {
-    expect(canSavePlacement({ confirmable: false, moved: false })).toBe(false)
-    expect(canSavePlacement({ confirmable: false, moved: true })).toBe(true)
+    expect(canSavePlacement({ ...close, confirmable: false, moved: false })).toBe(false)
+    expect(canSavePlacement({ ...close, confirmable: false, moved: true })).toBe(true)
   })
 
   it('a settled pin can be confirmed where it stands', () => {
-    expect(canSavePlacement({ confirmable: true, moved: false })).toBe(true)
+    expect(canSavePlacement({ ...close, confirmable: true, moved: false })).toBe(true)
   })
 
   it('no session, no save', () => {
     expect(canSavePlacement(null)).toBe(false)
+    expect(placementSaveBlock(null)).toBe('no_session')
+  })
+})
+
+/**
+ * Fix 2: 'manual' is the highest trust level in this app - it outranks every
+ * geocoder and takes the customer off "Needs a pin" for good - so it has to mean
+ * a human looked at the lid. It used to mean only that the map had moved 2 m,
+ * which at zoom 9 is a sub-pixel nudge over a point 21 km from the property.
+ */
+describe('a pin cannot be stamped from a zoom where no lid is visible', () => {
+  it('the ordinary path is untouched: opened, panned a little, Save is open', () => {
+    const opened = placementView(town, somewhere)
+    expect(canSavePlacement({ ...opened, moved: true })).toBe(true)
+    expect(canSavePlacement({ confirmable: false, moved: true, zoom: MIN_PLACEMENT_ZOOM })).toBe(
+      true
+    )
+    expect(canSavePlacement({ confirmable: false, moved: true, zoom: 19 })).toBe(true)
+  })
+
+  it('a nudge from a zoom that shows a county saves nothing', () => {
+    for (const zoom of [9, 13, 16, 17, 17.9]) {
+      expect(canSavePlacement({ confirmable: false, moved: true, zoom })).toBe(false)
+      expect(placementSaveBlock({ confirmable: false, moved: true, zoom })).toBe('zoom')
+    }
+  })
+
+  it('nor does confirming a settled pin from up there - he cannot see it either', () => {
+    expect(canSavePlacement({ confirmable: true, moved: false, zoom: 9 })).toBe(false)
+    expect(placementSaveBlock({ confirmable: true, moved: true, zoom: 9 })).toBe('zoom')
+  })
+
+  it('zooming back in re-opens Save without asking him to move again', () => {
+    // He zooms out for context and comes back. The aiming he already did stands.
+    const session = { confirmable: false, moved: true, zoom: 12 }
+    expect(canSavePlacement(session)).toBe(false)
+    expect(canSavePlacement({ ...session, zoom: 19 })).toBe(true)
+  })
+
+  it('a session with no zoom on it is shut, not open', () => {
+    // Only reachable if a future caller forgets to report the zoom. The failure
+    // has to land on "he cannot save", never on "he saved from anywhere".
+    expect(canSavePlacement({ confirmable: true, moved: true })).toBe(false)
+    expect(canSavePlacement({ confirmable: true, moved: true, zoom: null })).toBe(false)
+    expect(canSavePlacement({ confirmable: true, moved: true, zoom: 'close' })).toBe(false)
+  })
+
+  it('the zoom complaint outranks the move complaint, because it is the fix', () => {
+    expect(placementSaveBlock({ confirmable: false, moved: false, zoom: 9 })).toBe('zoom')
+    expect(placementSaveBlock({ confirmable: false, moved: false, zoom: 19 })).toBe('move')
+    expect(placementSaveBlock({ confirmable: true, moved: false, zoom: 19 })).toBeNull()
   })
 })
 
@@ -162,7 +218,7 @@ describe('undo puts the pin and its label back exactly as they were', () => {
     expect(undone.lng).toBe(-81.17)
     expect(undone.locationPrecision).toBe('locality')
     expect(undone.locationConfirmedAt).toBeNull()
-    expect(undone).toEqual({ ...town, locationConfirmedAt: null, addressChangedAt: null })
+    expect(undone).toEqual({ ...town, locationConfirmedAt: null })
   })
 
   it('the customer goes back onto the "Needs a pin" list he came off', () => {
@@ -172,22 +228,57 @@ describe('undo puts the pin and its label back exactly as they were', () => {
     expect(pinConfirmCase(updateCustomerState(saved, 'c', before).customers[1])).toBe('locality')
   })
 
-  it('an address-changed flag survives the round trip', () => {
-    // Saving a pin answers that flag by out-dating it. Undo has to put the
-    // question back, or a 500-mile-wrong pin quietly looks settled again.
+  // Direction 1. The flag the PLACEMENT itself silenced has to come back when
+  // the placement goes away, or a 500-mile-wrong pin quietly looks settled.
+  it('a flag the placement answered comes back when the placement is undone', () => {
     const flagged = { ...pinned, addressChangedAt: 1750000001000 }
     const before = pinSnapshot(flagged)
     const s = { customers: [flagged], sentReminders: [], sentAt: {} }
     const saved = updateCustomerState(s, 'a', manualLocationPatch({ lat: 35.4, lng: -81.2 }))
     expect(pinConfirmCase(saved.customers[0])).toBeNull()
-    expect(pinConfirmCase(updateCustomerState(saved, 'a', before).customers[0])).toBe(
-      'address_changed'
-    )
+    const undone = updateCustomerState(saved, 'a', before).customers[0]
+    expect(pinConfirmCase(undone)).toBe('address_changed')
+    // And the flag itself is the same moment it always was, untouched by either
+    // the placement or the undo.
+    expect(undone.addressChangedAt).toBe(1750000001000)
+    expect(undone.locationConfirmedAt).toBe(1750000000000)
+  })
+
+  // Direction 2, the bug this task exists to close. The verifier's sequence in a
+  // real browser: move a pin, Save, edit the address to Erie PA inside the ten
+  // seconds, then Undo. The snapshot used to carry addressChangedAt, so Undo
+  // wrote the pre-edit value back, the app forgot the address had ever moved,
+  // and the pin drew solid in Dallas NC with the card saying "Pin from the
+  // address lookup".
+  it('an address edit made while the toast is up survives the undo', () => {
+    const before = pinSnapshot(pinned)
+    const s = { customers: [pinned], sentReminders: [], sentAt: {} }
+    const saved = updateCustomerState(s, 'a', manualLocationPatch({ lat: 35.4, lng: -81.2 }, 9))
+    const edited = updateCustomerState(saved, 'a', {
+      address: '999 Faraway Rd, Erie, PA 16501',
+    })
+    expect(pinConfirmCase(edited.customers[0])).toBe('address_changed')
+
+    const undone = updateCustomerState(edited, 'a', before).customers[0]
+    expect(undone.address).toBe('999 Faraway Rd, Erie, PA 16501')
+    expect(pinConfirmCase(undone)).toBe('address_changed')
+    expect(undone.addressChangedAt).toBe(edited.customers[0].addressChangedAt)
+    // The pin is back where it was and labelled as it was - undo still undoes
+    // the placement, it just does not undo the edit.
+    expect([undone.lat, undone.lng]).toEqual([pinned.lat, pinned.lng])
+    expect(undone.locationPrecision).toBe('manual')
+    expect(undone.locationConfirmedAt).toBe(1750000000000)
   })
 
   it('undo is values, not a promise about the rest of the record', () => {
+    // Key for key with manualLocationPatch and nothing more: whatever a
+    // placement writes, undo puts back, and it writes nothing else. The moment
+    // this list grows a key a placement does not write, undo starts reverting
+    // something the operator did on purpose in the meantime.
+    expect(Object.keys(pinSnapshot(pinned)).sort()).toEqual(
+      Object.keys(manualLocationPatch({ lat: 1, lng: 2 })).sort()
+    )
     expect(Object.keys(pinSnapshot(pinned)).sort()).toEqual([
-      'addressChangedAt',
       'lat',
       'lng',
       'locationConfirmedAt',
@@ -205,7 +296,7 @@ describe('undo puts the pin and its label back exactly as they were', () => {
   })
 
   it('it does not revert anything else that happened in those ten seconds', () => {
-    // The undo carries a patch of five keys built at save time, not a copy of
+    // The undo carries a patch of four keys built at save time, not a copy of
     // the whole customer: marking him pumped while the toast is up survives.
     const before = pinSnapshot(town)
     const saved = updateCustomerState(state, 'c', manualLocationPatch({ lat: 35.4, lng: -81.2 }))
@@ -283,6 +374,17 @@ describe('no gesture can reach manualLocationPatch', () => {
       })
     expect(callers.length).toBeGreaterThan(0)
     expect([...new Set(callers)].sort()).toEqual(['saveNewCustomer', 'savePlacedPin'])
+  })
+
+  // The zoom gate is a lib function, and the browser proof that it is wired to
+  // the live map is in e2e/demo_path_pins.mjs. This is the structural half: the
+  // session has to learn the map's zoom, and the Save button has to be gated on
+  // the lib's answer rather than on a second opinion computed in the component.
+  it('the placement session is told the map zoom, and Save is gated on it', () => {
+    expect(mapTab).toMatch(/zoomend:/)
+    expect(mapTab).toMatch(/zoom: view\.zoom/)
+    expect(mapTab).toMatch(/blocked=\{placementSaveBlock\(placing\)\}/)
+    expect(mapTab).not.toMatch(/MIN_PLACEMENT_ZOOM/)
   })
 
   it('cancelling writes nothing at all', () => {

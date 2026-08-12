@@ -146,16 +146,23 @@ export function manualLocationPatch(point, now = Date.now()) {
 }
 
 /**
- * The exact inverse of manualLocationPatch: everything about a customer that a
- * pin placement overwrites, as a patch that puts it all back.
+ * The exact inverse of manualLocationPatch: everything a pin placement writes,
+ * as a patch that puts it all back.
  *
  * This is what Undo applies. It is a snapshot of VALUES, not a closure, on
  * purpose - the undo button lives for ten seconds, and a patch built now and
  * applied later through the current write funnel cannot revert anything else the
- * operator did in the meantime. The five keys are the whole footprint of a
- * placement: the two coordinates, the label saying where they came from, the
- * moment a human vouched for them, and the address-changed flag a placement
- * silently answers by out-dating it.
+ * operator did in the meantime.
+ *
+ * Key for key with manualLocationPatch, and that is the whole rule. It notably
+ * does NOT carry addressChangedAt. A placement never writes that field: it
+ * silences the flag purely by stamping a locationConfirmedAt that is a bigger
+ * number, so restoring the old locationConfirmedAt restores the flag by itself -
+ * an undo of a placement that answered "the address moved" puts that question
+ * straight back. Carrying the old value instead would have undone the address
+ * edit as well: place a pin, edit the address to another state inside the ten
+ * seconds, press Undo, and the app forgot the address had ever moved and drew a
+ * settled pin 500 miles from the customer's house.
  */
 export function pinSnapshot(c) {
   return {
@@ -163,7 +170,6 @@ export function pinSnapshot(c) {
     lng: c.lng ?? null,
     locationPrecision: c.locationPrecision || '',
     locationConfirmedAt: c.locationConfirmedAt ?? null,
-    addressChangedAt: c.addressChangedAt ?? null,
   }
 }
 
@@ -206,9 +212,34 @@ export function placementView(customer, current) {
 /** Under this, the map has not moved - it settled back where it started. */
 export const PLACEMENT_MOVE_METERS = 2
 
-/** Save is a claim about a lid. Either he aimed, or he confirmed a settled pin. */
-export const canSavePlacement = (session) =>
-  !!session && (session.confirmable || session.moved)
+/**
+ * Why Save is shut, or null when it is open.
+ *
+ * Save is a claim about a lid, and a claim has two halves: he aimed at
+ * something (or confirmed a pin somebody already stands behind), and he was
+ * close enough to see what he was aiming at.
+ *
+ * The zoom half is not covered by the move half. MIN_PLACEMENT_ZOOM only sets
+ * the view placement OPENS on; the map is his afterwards, and PLACEMENT_MOVE_METERS
+ * is 2 m, which is about 9 px at zoom 19 and a fraction of a pixel at zoom 9. So
+ * "the map moved" was satisfied by a nudge from any altitude, and a nudge at
+ * zoom 9 stamped 'manual' - the highest trust level this app has, outranking
+ * every geocoder and removing the customer from "Needs a pin" for good - on a
+ * point that could be 20 km from the property. At the zoom the placement opens
+ * at this never fires, so the ordinary path (open, pan a little, Save) is
+ * unchanged; it only speaks up once he has zoomed out past the point where a
+ * one-metre concrete lid is on the screen at all.
+ *
+ * @returns {'no_session'|'zoom'|'move'|null}
+ */
+export function placementSaveBlock(session) {
+  if (!session) return 'no_session'
+  if (!(session.zoom >= MIN_PLACEMENT_ZOOM)) return 'zoom'
+  if (!(session.confirmable || session.moved)) return 'move'
+  return null
+}
+
+export const canSavePlacement = (session) => placementSaveBlock(session) === null
 
 /**
  * Where the pin came from, in one word, for the customer card.

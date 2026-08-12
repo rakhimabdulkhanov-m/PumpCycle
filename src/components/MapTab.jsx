@@ -5,12 +5,12 @@ import 'leaflet/dist/leaflet.css'
 import { dueStatus, todayISO } from '../lib/dates.js'
 import { hasLocation } from '../lib/storage.js'
 import {
-  canSavePlacement,
   customersNeedingPin,
   manualLocationPatch,
   needsPinConfirmation,
   pinConfirmCase,
   pinSnapshot,
+  placementSaveBlock,
   placementView,
   PLACEMENT_MOVE_METERS,
 } from '../lib/location.js'
@@ -141,24 +141,47 @@ function RememberView({ storeRef }) {
  * against the coordinate placement opened on, not counted as events, so the
  * opening setView, a nudge and a nudge back, or an invalidateSize do not add up
  * to "he aimed at something".
+ *
+ * `zoomend` keeps the session's idea of how close he is standing in step with
+ * the map, because how close he is standing is half of whether Save is a claim
+ * he can make (see placementSaveBlock). Both events report it: a wheel zoom
+ * fires zoomend, and a pinch or a keyboard +/- can settle through moveend alone.
  */
-function PlacementMap({ active, origin, onMoved }) {
+function PlacementMap({ active, origin, onMoved, onZoom }) {
   const map = useMapEvents({
     click: (e) => {
       if (active) map.panTo(e.latlng)
     },
+    zoomend: () => {
+      if (active) onZoom(map.getZoom())
+    },
     moveend: () => {
       if (!active || !origin) return
+      onZoom(map.getZoom())
       if (map.getCenter().distanceTo(origin) > PLACEMENT_MOVE_METERS) onMoved()
     },
   })
   return null
 }
 
+// The undo line is deliberately part of the toast rather than a promise the app
+// keeps somewhere else. The write is already saved; the undo is a courtesy that
+// lives as long as this box does, and anything that dismisses the box - the ten
+// seconds running out, or leaving the Map tab - ends it. Saying so is cheaper
+// and more honest than carrying a pending undo across tabs, which would mean an
+// operator on the Due list holding an invisible ten-second window over a
+// customer he can no longer see.
 function Toast({ message, actionLabel, onAction }) {
   return (
     <div className="fixed bottom-6 left-1/2 z-[1300] flex -translate-x-1/2 items-center gap-4 rounded-lg bg-gray-900 px-5 py-3 text-lg font-medium text-white shadow-xl">
-      <span>{message}</span>
+      <span>
+        {message}
+        {onAction && (
+          <span className="block text-sm font-normal text-gray-300">
+            Saved. Undo only while this is showing.
+          </span>
+        )}
+      </span>
       {onAction && (
         <button
           type="button"
@@ -290,12 +313,13 @@ export default function MapTab({
   // duplicate customer would be made of.
   //
   //   {mode:'new'|'existing', customerId?, origin:{lat,lng}, confirmable, moved,
-  //    returnTo:{center,zoom}}
+  //    zoom, returnTo:{center,zoom}}
   //
   // confirmable: the map opened on a coordinate somebody already stands behind,
   // so Save alone is a meaningful answer. moved: the map has since moved off it.
-  // Between them they are the whole rule for whether Save is a claim about a lid
-  // or about wherever the map happened to be pointing.
+  // zoom: how close he is standing right now. Between them they are the whole
+  // rule for whether Save is a claim about a lid or about wherever the map
+  // happened to be pointing from however far away.
   const [placing, setPlacing] = useState(null)
   const [listOpen, setListOpen] = useState(false)
   // The spot the crosshair was on when a NEW customer's placement was accepted,
@@ -381,6 +405,7 @@ export default function MapTab({
       origin: { lat: view.center[0], lng: view.center[1] },
       confirmable: view.confirmable,
       moved: false,
+      zoom: view.zoom,
       returnTo,
     })
   }
@@ -512,6 +537,7 @@ export default function MapTab({
             active={aiming}
             origin={placing?.origin}
             onMoved={() => setPlacing((p) => (p && !p.moved ? { ...p, moved: true } : p))}
+            onZoom={(z) => setPlacing((p) => (p && p.zoom !== z ? { ...p, zoom: z } : p))}
           />
           {/* No pin on this map is draggable, in either mode and on either kind
               of screen. A drag and a pan are the same gesture, so a draggable pin
@@ -562,7 +588,7 @@ export default function MapTab({
                 : 'Placing a new lid pin'
             }
             address={placingCustomer?.address}
-            canSave={canSavePlacement(placing)}
+            blocked={placementSaveBlock(placing)}
             saveLabel={placingCustomer ? 'Save pin here' : 'Use this spot'}
             onSave={
               placingCustomer ? savePlacedPin : () => setNewPoint(crosshairPoint())

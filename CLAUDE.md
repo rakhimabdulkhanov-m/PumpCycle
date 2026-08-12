@@ -45,9 +45,14 @@ goes stale.
    phone (tel:), email (mailto:), tank size, last pumped, cycle, next due, notes.
    Commercial cards: "Commercial - Grease trap" badge. Overdue cards: reach-out strip with
    Call/Email links. Buttons: [Mark pumped today] [Edit].
-   Drop-lid-pin flow: FAB shows a draggable blue pin; desktop has side panel alongside;
-   mobile is two-step (full-screen pin placement, then a sheet for service type + name + save).
-   Save creates a real customer via addCustomer.
+   Pin placement flow (same on desktop and mobile): a fixed crosshair in the middle of the
+   map, the map moves under it, nothing on the map is draggable. Entered from the "+ Drop lid
+   pin" FAB (new customer) or "Move pin"/"Place pin" on a customer's card. Only the Save
+   button writes a coordinate, and only at zoom >= 18 and after the map has actually moved
+   (a settled pin may be confirmed where it stands). Saving stamps precision `manual` +
+   locationConfirmedAt; for an existing customer a 10-second Undo toast puts the old pin back.
+   For a new customer, Save holds the spot and a panel takes service type + name, then
+   creates a real customer via addCustomer.
 
 2. **Due list** - sorted by next due, filters Overdue/30/60/90, name/address search.
    Top counters: Overdue N - $X, Due in 30d N - $X, Reminders scheduled N.

@@ -1,3 +1,14 @@
+// What the Save button says while it is shut, keyed by placementSaveBlock's
+// answer. A greyed-out button with no reason on it is a dead end, so each of
+// these names the single thing he has to do to open it. 'zoom' is the one he
+// reaches by zooming out for context and not coming back in, so it says come
+// back in, rather than telling him he is wrong.
+const BLOCKED_LABEL = {
+  zoom: 'Zoom in until you can see the lid',
+  move: 'Move the map onto the lid',
+  no_session: 'Move the map onto the lid',
+}
+
 /**
  * Placement mode: a crosshair nailed to the middle of the map, and the map
  * moving under it.
@@ -14,11 +25,12 @@
 export default function PinPlacer({
   title,
   address,
-  canSave,
+  blocked,
   saveLabel,
   onSave,
   onCancel,
 }) {
+  const canSave = !blocked
   return (
     <>
       {/* Dead to the touch on purpose: every gesture in this mode belongs to the
@@ -67,7 +79,7 @@ export default function PinPlacer({
           disabled={!canSave}
           className="min-h-[3.5rem] flex-[2] rounded-xl bg-green-600 px-4 py-4 text-lg font-bold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-gray-300"
         >
-          {canSave ? saveLabel : 'Move the map onto the lid'}
+          {canSave ? saveLabel : BLOCKED_LABEL[blocked]}
         </button>
       </div>
     </>
