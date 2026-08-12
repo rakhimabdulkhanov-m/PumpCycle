@@ -39,6 +39,21 @@ export default defineConfig(async () => {
                   DB_LIVE_TEST: 'fake-d1-for-testing',
                   TEST_MIGRATIONS: migrations,
                 },
+                // Two empty scratch databases, driven by the same pool and the same
+                // applyD1Migrations helper as everything else - not a second
+                // harness. They exist because apply-migrations.js (setupFiles) runs
+                // before EVERY worker test file and leaves DB_DEV at the head
+                // migration, so no test can observe a database at 0001. Two things
+                // need one:
+                //   DB_MIGRATION_TEST - 0001 + rows, then 0002 run over that data,
+                //     which is the only way to check that visits and photos still
+                //     point at the same customers after the table rebuild.
+                //   DB_LADDER_TEST   - the whole ladder applied twice from empty,
+                //     to check it converges.
+                d1Databases: {
+                  DB_MIGRATION_TEST: 'vitest-migration-scratch',
+                  DB_LADDER_TEST: 'vitest-ladder-scratch',
+                },
               },
             }),
           ],

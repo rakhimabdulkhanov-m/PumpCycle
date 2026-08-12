@@ -1,20 +1,29 @@
 #!/usr/bin/env node
 /**
- * preflight.mjs — verify all tenants have matching schema versions.
+ * preflight.mjs — the deploy gate.
  *
- * For every tenant in tenants.config.mjs:
+ *   0. Assert worker/tenants.js, wrangler.jsonc and tenants.config.mjs describe
+ *      the SAME database for every live host (checkTenantWiring, no network).
+ *
+ * Then, for every tenant in tenants.config.mjs:
  *   1. Assert the D1 database exists (wrangler d1 info).
  *   2. Assert schema_meta.version equals the highest migration number on disk.
  *   3. Assert schema_meta.tenant_id equals the tenant key.
  *
- * Exits non-zero if any check fails.
+ * Exits non-zero if any check fails, and says WHICH check failed: "one or more
+ * tenants are not at the expected schema version" is the wrong diagnosis for a
+ * wiring problem and sends whoever reads it to migrate a database that is fine.
  * --local variant is not supported (remote only).
  */
 
-import { readdirSync } from 'fs'
 import { spawnSync } from 'child_process'
 import { resolve, join, dirname } from 'path'
 import { fileURLToPath } from 'url'
+import {
+  highestMigrationNumber,
+  readWranglerConfig,
+  checkTenantWiring,
+} from './deploy_checks.mjs'
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(SCRIPT_DIR, '..')
@@ -65,32 +74,44 @@ function wranglerQuery(dbname, sql) {
 }
 
 // ---------------------------------------------------------------------------
-// Scan migration files for highest number on disk
-// ---------------------------------------------------------------------------
-function highestMigrationOnDisk() {
-  let files
-  try {
-    files = readdirSync(MIGRATIONS_DIR)
-  } catch {
-    return 0
-  }
-  const nums = files
-    .filter((f) => /^\d{4}_.*\.sql$/.test(f))
-    .map((f) => parseInt(f.split('_')[0], 10))
-  return nums.length ? Math.max(...nums) : 0
-}
-
-// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 const { TENANTS } = await import('./tenants.config.mjs')
-const expectedVersion = highestMigrationOnDisk()
+const expectedVersion = highestMigrationNumber(MIGRATIONS_DIR)
 
 console.log(`Expected schema version (highest migration on disk): ${expectedVersion}`)
 console.log()
 
 const rows = []
-let anyFailed = false
+// Each check pushes its own sentence. The exit message is built from these, so a
+// wiring failure never gets reported as a schema-version failure.
+const failures = []
+
+// ---------------------------------------------------------------------------
+// Check 0: worker/tenants.js, wrangler.jsonc and tenants.config.mjs describe the
+// SAME database for every live host. No network; see checkTenantWiring for what
+// each kind of mismatch costs.
+//
+// Matching on the host string alone is not enough. A tenants.config entry can
+// name a database that the hostname's binding does not resolve to, and then
+// every check below inspects a database nobody serves: the table prints OK while
+// the database the client actually reads sits at version 0.
+// ---------------------------------------------------------------------------
+const { LIVE_TENANTS } = await import('../worker/tenants.js')
+const wiringProblems = checkTenantWiring({
+  liveTenants: LIVE_TENANTS,
+  tenants: TENANTS,
+  wranglerConfig: readWranglerConfig(join(ROOT, 'wrangler.jsonc')),
+})
+for (const problem of wiringProblems) console.error(`ERROR: ${problem}`)
+if (wiringProblems.length > 0) {
+  console.log()
+  failures.push(
+    `tenant wiring is inconsistent (${wiringProblems.length} problem(s) listed above). ` +
+      `worker/tenants.js, wrangler.jsonc and scripts/tenants.config.mjs do not agree on ` +
+      `which database a live hostname reads. Do NOT migrate anything until they do.`
+  )
+}
 
 for (const [key, cfg] of Object.entries(TENANTS)) {
   const dbname = cfg.d1
@@ -109,7 +130,7 @@ for (const [key, cfg] of Object.entries(TENANTS)) {
   if (!info) {
     result.notes.push('DB not found or unreachable')
     rows.push(result)
-    anyFailed = true
+    failures.push(`database '${dbname}' (tenant '${key}') was not found or was unreachable.`)
     continue
   }
   result.dbExists = true
@@ -123,8 +144,11 @@ for (const [key, cfg] of Object.entries(TENANTS)) {
     result.version = 0
     result.tenantId = null
     result.notes.push(`version 0 (schema_meta missing or empty), expected ${expectedVersion}`)
-    anyFailed = true
     rows.push(result)
+    failures.push(
+      `tenant '${key}' (${dbname}) has no schema_meta row: it is at version 0, expected ` +
+        `${expectedVersion}. Run: node scripts/migrate.mjs --tenant=${key}`
+    )
     continue
   }
 
@@ -134,12 +158,19 @@ for (const [key, cfg] of Object.entries(TENANTS)) {
 
   if (result.version !== expectedVersion) {
     result.notes.push(`version ${result.version}, expected ${expectedVersion}`)
-    anyFailed = true
+    failures.push(
+      `tenant '${key}' (${dbname}) is at schema version ${result.version}, expected ` +
+        `${expectedVersion}. Run: node scripts/migrate.mjs --tenant=${key}`
+    )
   }
 
   if (result.tenantId !== key) {
     result.notes.push(`tenant_id '${result.tenantId}', expected '${key}'`)
-    anyFailed = true
+    failures.push(
+      `tenant '${key}' (${dbname}) records tenant_id '${result.tenantId}'. That database was ` +
+        `migrated as a different tenant - check you are pointed at the right one before ` +
+        `touching it.`
+    )
   }
 
   result.pass = result.version === expectedVersion && result.tenantId === key
@@ -190,8 +221,9 @@ for (const r of rows) {
 console.log(sep)
 console.log()
 
-if (anyFailed) {
-  console.error('PREFLIGHT FAILED: one or more tenants are not at the expected schema version.')
+if (failures.length > 0) {
+  console.error('PREFLIGHT FAILED:')
+  for (const f of failures) console.error(`  - ${f}`)
   process.exit(1)
 }
 

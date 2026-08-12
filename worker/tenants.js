@@ -18,22 +18,42 @@ const DEMO_HOSTS = new Set([
 ])
 
 /**
- * Paying clients. Empty on purpose: the first client is added in a later step together
- * with its D1 and R2 bindings in wrangler.jsonc. Shape of an entry:
+ * Real, resolved tenants: a host in here gets its own database and is NOT the demo.
+ * Shape of an entry:
  *
- *   'app.pumpcycle.net': {
- *     db: 'DB_CLIENT1',          // env binding name, NOT a database id
- *     r2: 'R2_CLIENT1',
+ *   'client-one.example': {
+ *     db: 'DB_CLIENT1',          // env binding NAME, not a database id
+ *     r2: 'R2_CLIENT1',          // optional - omit entirely until a bucket exists
  *     company: 'Client One Septic',
  *     timezone: 'America/New_York',
- *     fromEmail: 'reminders@client-one.example',
- *     replyTo: 'office@client-one.example',
+ *     fromEmail: 'reminders@client-one.example',   // optional
+ *     replyTo: 'office@client-one.example',        // optional
  *   }
  *
+ * Adding a host here requires the matching bindings in wrangler.jsonc and a migrated
+ * database, both in the same deploy; scripts/preflight.mjs fails the deploy otherwise.
  * A host listed here whose bindings are missing from env resolves to 'misconfigured'
  * and the router answers 503. There is deliberately no fallback database.
  */
-export const LIVE_TENANTS = {}
+export const LIVE_TENANTS = {
+  /**
+   * The greenfield validation host: app. is where risky things are learned first,
+   * against pumpcycle-dev, before demo. or a paying client's hostname is touched.
+   *
+   * `db` is the binding name DB_DEV, looked up in env per request. If that binding is
+   * absent from a deploy this host resolves 'misconfigured' and answers 503 - it never
+   * falls back to another database.
+   *
+   * No `r2`: no bucket exists yet and the field is optional, so resolveTenant does not
+   * require one. No fromEmail/replyTo: Resend does not exist yet, and an address
+   * invented here is an address the reminder sender would later try to send from.
+   */
+  'app.pumpcycle.net': {
+    db: 'DB_DEV',
+    company: 'PumpCycle Dev',
+    timezone: 'America/New_York',
+  },
+}
 
 /**
  * The only hostnames on which DEV_TENANT_HOST is honoured. `wrangler dev` serves on these

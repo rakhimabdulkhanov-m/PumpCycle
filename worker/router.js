@@ -1,6 +1,7 @@
 import { json } from './lib/json.js'
 import * as lead from './api/lead.js'
 import * as geocode from './api/geocode.js'
+import * as bootstrap from './api/bootstrap.js'
 
 /**
  * Explicit route table. Matching is on method AND path.
@@ -24,6 +25,13 @@ const ROUTES = [
   {
     path: '/api/geocode',
     methods: { GET: geocode.get },
+  },
+  // Deliberately NOT demoOnly: this is the route that TELLS the front end which of the
+  // two it is, so it has to exist on both. It is also the one route that must stay
+  // harmless without auth - see the contract in api/bootstrap.js.
+  {
+    path: '/api/bootstrap',
+    methods: { GET: bootstrap.get },
   },
 ]
 
