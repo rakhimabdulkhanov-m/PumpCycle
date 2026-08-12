@@ -198,8 +198,18 @@ function scanMigrations() {
 // ---------------------------------------------------------------------------
 // Hash helper
 // ---------------------------------------------------------------------------
+// Line endings are normalised to LF before hashing. Git converts .sql files to
+// CRLF on checkout under core.autocrlf=true (the Windows default), so hashing raw
+// bytes makes the immutability check fire on a file nobody edited: measured here
+// on 0001_init.sql, stored fec6a380... (LF) against on-disk b826fdbc... (CRLF).
+// That is not a hypothetical - it blocked a migration, and it would also mean a
+// migration applied from one machine could never be verified from another.
+// Stripping \r is what makes the hash a property of the SQL rather than of the
+// checkout, and it matches the hashes already stored (git blobs are LF).
+// .gitattributes pins these files to LF as well; this is the belt to that braces,
+// because a stored hash outlives any one clone's config.
 function sha256File(filePath) {
-  const content = readFileSync(filePath, 'utf8')
+  const content = readFileSync(filePath, 'utf8').replace(/\r\n/g, '\n')
   return createHash('sha256').update(content).digest('hex')
 }
 

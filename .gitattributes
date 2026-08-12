@@ -1,0 +1,8 @@
+# Migration files are hashed and the hash is stored in the database as an
+# immutability check. A CRLF checkout changes those bytes and fires the check on
+# a file nobody edited, so these are pinned to LF regardless of core.autocrlf.
+# migrate.mjs also normalises before hashing; both, not either.
+*.sql text eol=lf
+
+# Shell scripts must be LF to run at all.
+*.sh text eol=lf
