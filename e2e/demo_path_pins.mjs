@@ -36,6 +36,23 @@ const customers = () =>
   page.evaluate((k) => JSON.parse(localStorage.getItem(k)).customers, KEY)
 const byName = async (name) => (await customers()).find((c) => c.name === name)
 const markerCount = () => page.locator('.leaflet-marker-icon').count()
+
+// Leaflet keeps every marker in the DOM, on screen or not, so ".first()" is the
+// first customer in the book and not the one being looked at. This is the pin
+// nearest the middle of the window, i.e. the one the map was just flown to.
+async function markerNearCenter() {
+  const vp = page.viewportSize()
+  const all = await Promise.all(
+    (await page.locator('.leaflet-marker-icon').all()).map(async (m) => ({ m, b: await m.boundingBox() }))
+  )
+  return all
+    .filter((x) => x.b)
+    .map((x) => ({
+      ...x,
+      d: Math.hypot(x.b.x + x.b.width / 2 - vp.width / 2, x.b.y + x.b.height - vp.height / 2),
+    }))
+    .sort((a, b) => a.d - b.d)[0]
+}
 const hollowCount = () => page.locator('.leaflet-marker-icon.pin-unconfirmed').count()
 
 // The live Leaflet instance, found through the React fiber tree (no app changes).
@@ -152,28 +169,113 @@ check(
   `center ${v.center}`
 )
 
-// ------------------------------------------ demo path 3: drag records a manual
-console.log('\n--- demo: the pin drags and records as a human placement ---')
+// ------------------------------- demo path 3: a pan across a pin moves nothing
+// The regression this whole change exists to prevent. Panning used to be the
+// same gesture as dragging a pin, so a pan whose cursor happened to start over
+// somebody's pin moved that customer's lid and recorded it as a human placement.
+console.log('\n--- regression: a drag that starts ON a pin pans the map and moves no pin ---')
 // At zoom 19 his is the only marker anywhere near the middle of the screen.
-const box = await page.locator('.leaflet-marker-icon').first().boundingBox()
-const near = (await page.locator('.leaflet-marker-icon').all())
-const target = (
-  await Promise.all(
-    near.map(async (m) => ({ m, b: await m.boundingBox() }))
-  )
-).filter((x) => x.b && x.b.x > 300 && x.b.x < 1100 && x.b.y > 100 && x.b.y < 800)[0]
-check('his pin is on screen after the fly', !!target, target ? '' : `first marker box ${JSON.stringify(box)}`)
+const target = await markerNearCenter()
+check('his pin is on screen after the fly', !!target && target.d < 200, target ? `${target.d.toFixed(0)} px from centre` : 'no marker')
+const coordsOf = (list) => JSON.stringify(list.map((c) => [c.id, c.lat, c.lng]))
+const beforePan = coordsOf(await customers())
+const viewBeforePan = await view()
 if (target) {
-  await page.mouse.move(target.b.x + 15, target.b.y + 40)
+  // Start the gesture in the middle of the pin's body, not next to it.
+  await page.mouse.move(target.b.x + target.b.width / 2, target.b.y + target.b.height / 2)
   await page.mouse.down()
-  await page.mouse.move(target.b.x + 95, target.b.y + 100, { steps: 12 })
+  await page.mouse.move(target.b.x + 95, target.b.y + 130, { steps: 12 })
   await page.mouse.up()
   await page.waitForTimeout(1200)
 }
-const dragged = await byName('Verifier Test')
-check('precision is now manual', dragged.locationPrecision === 'manual', dragged.locationPrecision)
-check('and it is stamped confirmed', Number.isFinite(dragged.locationConfirmedAt), String(dragged.locationConfirmedAt))
-check('the coordinate actually moved', dragged.lat !== added.lat || dragged.lng !== added.lng)
+const afterPan = coordsOf(await customers())
+check('not one customer coordinate changed', afterPan === beforePan, afterPan === beforePan ? '' : afterPan)
+const viewAfterPan = await view()
+check(
+  'and the map itself panned instead',
+  viewAfterPan.center[0] !== viewBeforePan.center[0] || viewAfterPan.center[1] !== viewBeforePan.center[1],
+  `${JSON.stringify(viewBeforePan.center)} -> ${JSON.stringify(viewAfterPan.center)}`
+)
+const stillGeocoded = await byName('Verifier Test')
+check('his pin is still the geocoder\'s, not a "human placement"', stillGeocoded.locationPrecision !== 'manual', stillGeocoded.locationPrecision)
+
+// ----------------------- demo path 3b: the crosshair records a human placement
+console.log('\n--- demo: Move pin -> crosshair -> Save records a human placement ---')
+// Somewhere far out on the street map, to prove placement mode fixes both.
+await page.evaluate(() => window.__map.setZoom(13))
+await page.waitForTimeout(600)
+// The layer control is collapsed until it is hovered, the same as for a mouse.
+await page.locator('.leaflet-control-layers').hover()
+await page.waitForTimeout(400)
+await page.locator('.leaflet-control-layers-selector').nth(1).check()
+await page.waitForTimeout(600)
+const satelliteOn = () =>
+  page.evaluate(() => {
+    let on = false
+    window.__map.eachLayer((l) => {
+      if (l._url && l._url.includes('arcgisonline')) on = true
+    })
+    return on
+  })
+check('starts on the street map, zoomed out', (await satelliteOn()) === false && (await view()).zoom === 13)
+// Back to his card the only way there is: click his pin.
+await page.evaluate(
+  ({ lat, lng }) => window.__map.setView([lat, lng], 17, { animate: false }),
+  { lat: stillGeocoded.lat, lng: stillGeocoded.lng }
+)
+await page.waitForTimeout(800)
+const hisPin = await markerNearCenter()
+await hisPin.m.click()
+await page.waitForTimeout(700)
+check('clicking a pin opens that customer\'s card and nothing else', (await page.getByRole('heading', { name: 'Verifier Test' }).count()) === 1)
+check('the card says where the pin came from', (await page.locator('text=Pin from the address lookup').count()) === 1)
+await page.getByRole('button', { name: 'Move pin' }).click()
+await page.waitForTimeout(1200)
+const placingView = await view()
+check('placement zooms in far enough to see a lid', placingView.zoom >= 18, `zoom ${placingView.zoom}`)
+check('and switches to satellite, because a lid is only in imagery', await satelliteOn())
+check('the crosshair is on screen', (await page.locator('svg circle[r="24"]').count()) > 0)
+// Pan the map under the fixed crosshair, starting on empty imagery.
+await page.mouse.move(400, 300)
+await page.mouse.down()
+await page.mouse.move(480, 360, { steps: 10 })
+await page.mouse.up()
+await page.waitForTimeout(900)
+const aimedAt = await view()
+await page.getByRole('button', { name: 'Save pin here' }).click()
+await page.waitForTimeout(900)
+const placedPin = await byName('Verifier Test')
+check('precision is now manual', placedPin.locationPrecision === 'manual', placedPin.locationPrecision)
+check('and it is stamped confirmed', Number.isFinite(placedPin.locationConfirmedAt), String(placedPin.locationConfirmedAt))
+check('the coordinate actually moved', placedPin.lat !== stillGeocoded.lat || placedPin.lng !== stillGeocoded.lng)
+check(
+  'and it is what was under the crosshair, not where a finger was',
+  Math.abs(placedPin.lat - aimedAt.center[0]) < 0.0005 && Math.abs(placedPin.lng - aimedAt.center[1]) < 0.0005,
+  `${placedPin.lat},${placedPin.lng} vs crosshair ${aimedAt.center}`
+)
+
+// ------------------------------------------------ demo path 3c: undo the save
+console.log('\n--- demo: undo puts the pin and its label back ---')
+check('the confirmation offers an undo', (await page.getByRole('button', { name: 'Undo' }).count()) === 1)
+await page.getByRole('button', { name: 'Undo' }).click()
+await page.waitForTimeout(800)
+const undone = await byName('Verifier Test')
+check('the coordinate is back', undone.lat === stillGeocoded.lat && undone.lng === stillGeocoded.lng, `${undone.lat},${undone.lng}`)
+check('the precision label is back', undone.locationPrecision === stillGeocoded.locationPrecision, undone.locationPrecision)
+check('and so is the confirmation moment', (undone.locationConfirmedAt ?? null) === (stillGeocoded.locationConfirmedAt ?? null), String(undone.locationConfirmedAt))
+// Place it again, so the rest of the run has the manual pin it used to have.
+await (await markerNearCenter()).m.click()
+await page.waitForTimeout(600)
+await page.getByRole('button', { name: 'Move pin' }).click()
+await page.waitForTimeout(1200)
+await page.mouse.move(400, 300)
+await page.mouse.down()
+await page.mouse.move(470, 350, { steps: 10 })
+await page.mouse.up()
+await page.waitForTimeout(800)
+await page.getByRole('button', { name: 'Save pin here' }).click()
+await page.waitForTimeout(900)
+check('re-placed and manual again', (await byName('Verifier Test')).locationPrecision === 'manual')
 
 // -------------------------------------------- demo path 4: Map -> Due -> Map
 console.log('\n--- demo: the view survives Map -> Due -> Map ---')
@@ -230,14 +332,23 @@ await page.waitForTimeout(400)
 check('the list row says what happened', (await page.locator('text=Address changed - pin not moved').count()) === 1)
 await page.locator('button[aria-label="Close"]').first().click()
 await page.waitForTimeout(400)
-// Re-dragging the pin clears it through the ordinary manual path.
-const eb = await page.locator('.leaflet-marker-icon').first().boundingBox()
-await page.mouse.move(eb.x + 15, eb.y + 40)
-await page.mouse.down()
-await page.mouse.move(eb.x + 60, eb.y + 80, { steps: 10 })
-await page.mouse.up()
+// Re-placing the pin clears it through the ordinary manual path.
+await (await markerNearCenter()).m.click()
+await page.waitForTimeout(600)
+await page.getByRole('button', { name: 'Move pin' }).click()
 await page.waitForTimeout(1200)
-check('dragging the pin clears the flag', (await page.locator('button', { hasText: 'Needs a pin' }).count()) === 0)
+check(
+  'a pin nobody stands behind cannot be saved where it stands',
+  (await page.getByRole('button', { name: 'Move the map onto the lid' }).count()) === 1
+)
+await page.mouse.move(500, 350)
+await page.mouse.down()
+await page.mouse.move(560, 420, { steps: 10 })
+await page.mouse.up()
+await page.waitForTimeout(900)
+await page.getByRole('button', { name: 'Save pin here' }).click()
+await page.waitForTimeout(1000)
+check('placing the pin clears the flag', (await page.locator('button', { hasText: 'Needs a pin' }).count()) === 0)
 check('and the pin is solid again', (await hollowCount()) === 0)
 
 // ------------------------------------------------------------------- fix 2
@@ -255,10 +366,19 @@ await page.locator('button', { hasText: 'Needs a pin' }).first().click()
 await page.waitForTimeout(400)
 await page.getByText('Twin Wanda').first().click()
 await page.waitForTimeout(900)
-check('the placement panel names the right customer', (await page.getByTestId('placing-name').innerText()) === 'Twin Wanda')
+check(
+  'the placement banner names the right customer',
+  (await page.getByTestId('placing-name').innerText()).includes('Twin Wanda'),
+  await page.getByTestId('placing-name').innerText()
+)
+check(
+  'nothing can be saved before the map has been aimed',
+  (await page.getByRole('button', { name: 'Move the map onto the lid' }).count()) === 1
+)
+// A click is a pan on the desktop path: it brings that spot under the crosshair.
 await page.mouse.click(500, 400)
-await page.waitForTimeout(600)
-await page.getByRole('button', { name: 'Save pin' }).click()
+await page.waitForTimeout(900)
+await page.getByRole('button', { name: 'Save pin here' }).click()
 await page.waitForTimeout(900)
 const placed = await customers()
 const located = placed.filter((c) => c.lat !== null && c.name.startsWith('Twin'))

@@ -1,3 +1,8 @@
+/**
+ * Step two of a new lid: the spot is already aimed at with the crosshair and
+ * held as a blue pin on the map, and this names the customer it belongs to.
+ * "Move the pin" goes back to the crosshair with the typing intact.
+ */
 export default function NewLidPanel({
   draftType,
   onPickType,
@@ -5,9 +10,9 @@ export default function NewLidPanel({
   onName,
   address,
   onAddress,
-  pinPlaced,
   canSave,
   onSave,
+  onBack,
   onCancel,
 }) {
   const block = (active) =>
@@ -67,13 +72,13 @@ export default function NewLidPanel({
       </div>
 
       <div className="border-t border-gray-200 p-5">
-        {/* The pin is saved as "placed by hand", the strongest location this app
-            has. It has to actually have been placed by a hand. */}
-        {!pinPlaced && (
-          <p className="mb-3 text-base font-semibold text-amber-700">
-            Put the pin on the lid first.
-          </p>
-        )}
+        <button
+          type="button"
+          onClick={onBack}
+          className="mb-3 w-full rounded-lg border-2 border-gray-300 px-4 py-3 text-lg font-semibold text-gray-700 hover:bg-gray-100"
+        >
+          Move the pin
+        </button>
         <div className="flex gap-3">
         <button
           onClick={onSave}

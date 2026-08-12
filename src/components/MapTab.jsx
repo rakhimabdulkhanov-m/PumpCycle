@@ -5,15 +5,18 @@ import 'leaflet/dist/leaflet.css'
 import { dueStatus, todayISO } from '../lib/dates.js'
 import { hasLocation } from '../lib/storage.js'
 import {
+  canSavePlacement,
   customersNeedingPin,
   manualLocationPatch,
   needsPinConfirmation,
   pinConfirmCase,
-  zoomForPrecision,
+  pinSnapshot,
+  placementView,
+  PLACEMENT_MOVE_METERS,
 } from '../lib/location.js'
 import CustomerCard from './CustomerCard.jsx'
 import NewLidPanel from './NewLidPanel.jsx'
-import PlaceLidPanel from './PlaceLidPanel.jsx'
+import PinPlacer from './PinPlacer.jsx'
 
 const STATUS_COLORS = {
   overdue: '#dc2626',
@@ -68,13 +71,18 @@ const PIN_CASE_LABEL = {
   no_precision: 'Pin never checked',
 }
 
-// Blue draft pin — visually distinct from the red/yellow/green customer pins
-// so the "new one" reads clearly while it's being placed.
+// Blue draft pin — visually distinct from the red/yellow/green customer pins,
+// and the only thing it marks is a spot already aimed at with the crosshair
+// while the new customer's name is being typed.
 const DRAFT_ICON = makeIcon('#2563eb')
 
 // Anything past this is a different part of the country, not the next street:
 // flying it takes 8-10 s of swooping, so jump there instead.
 const FLY_MAX_METERS = 50000
+
+// Long enough to notice the toast, read it and reach for it one-handed in a
+// truck; short enough that it is gone before the next thing he does.
+const UNDO_MS = 10000
 
 // Fly to a location saved from Add Customer (Due tab). Lives INSIDE
 // MapContainer on purpose: children only render once the map exists, so useMap()
@@ -117,24 +125,49 @@ function RememberView({ storeRef }) {
   return null
 }
 
-// Tapping the map during placement puts the pin there. Lives inside
-// MapContainer because that is where a map instance exists. It is the cheap half
-// of "Save needs a human decision": on a satellite image the lid is a thing you
-// point at, and pointing at it is a decision in a way that "the pin happened to
-// start here" is not.
-function PlacementClicks({ active, onPlace }) {
-  useMapEvents({
+/**
+ * The two map-side halves of placement mode. Lives inside MapContainer because
+ * that is where a map instance exists.
+ *
+ * A click anywhere pans that spot under the crosshair. It is the fast path on a
+ * desktop, where a mouse can point at a lid directly and panning across a
+ * screen with a trackpad is slow; on a phone the same tap does the same thing
+ * and is simply less useful than dragging the map. It is deliberately a PAN and
+ * not a placement: the crosshair stays where it is, the answer is still whatever
+ * the middle of the screen shows when Save is pressed, and there is exactly one
+ * of those.
+ *
+ * `moveend` is what tells the session the map has actually moved. It is measured
+ * against the coordinate placement opened on, not counted as events, so the
+ * opening setView, a nudge and a nudge back, or an invalidateSize do not add up
+ * to "he aimed at something".
+ */
+function PlacementMap({ active, origin, onMoved }) {
+  const map = useMapEvents({
     click: (e) => {
-      if (active) onPlace({ lat: e.latlng.lat, lng: e.latlng.lng, placed: true })
+      if (active) map.panTo(e.latlng)
+    },
+    moveend: () => {
+      if (!active || !origin) return
+      if (map.getCenter().distanceTo(origin) > PLACEMENT_MOVE_METERS) onMoved()
     },
   })
   return null
 }
 
-function Toast({ message }) {
+function Toast({ message, actionLabel, onAction }) {
   return (
-    <div className="fixed bottom-6 left-1/2 z-[1300] -translate-x-1/2 rounded-lg bg-gray-900 px-5 py-3 text-lg font-medium text-white shadow-xl">
-      {message}
+    <div className="fixed bottom-6 left-1/2 z-[1300] flex -translate-x-1/2 items-center gap-4 rounded-lg bg-gray-900 px-5 py-3 text-lg font-medium text-white shadow-xl">
+      <span>{message}</span>
+      {onAction && (
+        <button
+          type="button"
+          onClick={onAction}
+          className="min-h-[3.25rem] rounded-lg bg-white px-5 py-2 text-xl font-bold text-gray-900"
+        >
+          {actionLabel}
+        </button>
+      )}
     </div>
   )
 }
@@ -236,7 +269,7 @@ function NeedsPinList({ customers, onPick, onClose, hiddenOnMobile }) {
         ))}
       </div>
       <p className="border-t border-gray-200 px-4 py-2 text-sm text-gray-500">
-        Pick a customer, then drag the pin onto his lid.
+        Pick a customer, then line the cross up on his lid.
       </p>
     </div>
   )
@@ -252,25 +285,33 @@ export default function MapTab({
   onLeaveView,
 }) {
   const [selectedId, setSelectedId] = useState(null)
-  // What the draft pin is for: nothing, a brand-new customer, or an existing one
-  // who has no location yet. One state, not two booleans, so "new" and "for
-  // Harold" cannot both be true - that pair is what a duplicate customer would
-  // be made of.
-  const [placing, setPlacing] = useState(null) // null | {mode:'new'} | {mode:'existing', customerId}
+  // The placement session, or null. One state, not a set of booleans, so "a new
+  // customer" and "for Harold" cannot both be true - that pair is what a
+  // duplicate customer would be made of.
+  //
+  //   {mode:'new'|'existing', customerId?, origin:{lat,lng}, confirmable, moved,
+  //    returnTo:{center,zoom}}
+  //
+  // confirmable: the map opened on a coordinate somebody already stands behind,
+  // so Save alone is a meaningful answer. moved: the map has since moved off it.
+  // Between them they are the whole rule for whether Save is a claim about a lid
+  // or about wherever the map happened to be pointing.
+  const [placing, setPlacing] = useState(null)
   const [listOpen, setListOpen] = useState(false)
-  const [locating, setLocating] = useState(false) // mobile step 1: position pin, no form yet
-  // {lat,lng,placed}|null. placed=false means "this is where the pin was put
-  // down to start with", which is not a coordinate anybody chose. Saving one of
-  // those stamps locationPrecision:'manual' and locationConfirmedAt on the
-  // middle of whatever the map happened to be showing, and it then looks like
-  // the strongest location this app has. So it is one state, not two: the
-  // coordinate and whether a human is behind it cannot drift apart.
-  const [draftPin, setDraftPin] = useState(null)
+  // The spot the crosshair was on when a NEW customer's placement was accepted,
+  // held while his name and service type are typed. For an existing customer
+  // there is no such gap: Save writes.
+  const [newPoint, setNewPoint] = useState(null)
   const [draftType, setDraftType] = useState(null) // 'residential'|'commercial'|null
   const [draftName, setDraftName] = useState('')
   const [draftAddress, setDraftAddress] = useState('')
+  // {message} | {message, undo:{id, patch}} - the undo carries VALUES, not a
+  // closure over the state at save time, so pressing it ten seconds later
+  // reverts the pin and nothing else that happened in between.
   const [toast, setToast] = useState(null)
   const mapRef = useRef(null)
+  const satelliteRef = useRef(null)
+  const streetRef = useRef(null)
   const wrapperRef = useRef(null)
   const viewRef = useRef(initialView)
   const selected = customers.find((c) => c.id === selectedId)
@@ -278,98 +319,128 @@ export default function MapTab({
   // the legend; nothing here invents a coordinate to draw.
   const located = customers.filter(hasLocation)
   const needsPin = customersNeedingPin(customers)
-  // Resolved from the live list rather than copied into state, so the panel and
-  // the banner always name the customer the pin is actually going to.
+  // Resolved from the live list rather than copied into state, so the banner
+  // always names the customer the pin is actually going to.
   const placingCustomer =
     placing?.mode === 'existing'
       ? customers.find((c) => c.id === placing.customerId)
       : null
-  const placingPin = placing?.mode === 'new' || !!placingCustomer
-  const isTouch = window.matchMedia('(pointer: coarse)').matches
-  // Mobile-only "locate" step: full map + draggable pin, form not yet shown.
-  const mobileLocate = isTouch && placingPin && locating
-  const sheetOpen = !!selected || (placingPin && !mobileLocate)
-  const showList = listOpen && needsPin.length > 0 && !placingPin
-  // Nothing is saved off a pin nobody moved.
-  const pinPlaced = !!draftPin && draftPin.placed
+  // Naming the new customer: the aiming is done, the map is a backdrop again.
+  const naming = placing?.mode === 'new' && !!newPoint
+  const aiming = !!placing && !naming
+  const sheetOpen = !!selected || naming
+  const showList = listOpen && needsPin.length > 0 && !placing
 
   useEffect(() => {
     if (!toast) return
-    const t = setTimeout(() => setToast(null), 2500)
+    const t = setTimeout(() => setToast(null), toast.undo ? UNDO_MS : 2500)
     return () => clearTimeout(t)
   }, [toast])
 
-  // Both entry points start the same way: a draft pin at the middle of what he
-  // is looking at, everything else cleared, the map to itself. That starting
-  // coordinate is a convenience, never an answer - Save stays disabled until the
-  // pin is dragged or the lid is tapped.
+  // A lid is only visible in imagery, so placement mode takes him to imagery.
+  // Once. If he switches to the street map himself while placing - to read a
+  // house number, which is a real thing he does - nothing switches him back.
+  function showSatellite(map) {
+    const sat = satelliteRef.current
+    const street = streetRef.current
+    if (!sat || map.hasLayer(sat)) return
+    if (street && map.hasLayer(street)) map.removeLayer(street)
+    map.addLayer(sat)
+  }
+
+  // The one entrance to moving a pin. Both callers are explicit, named acts: the
+  // FAB for a new lid, and "Move pin" / "Place pin" on a customer's own card.
+  // Nothing on the map itself can start this.
   function beginPlacing(next) {
     const map = mapRef.current
     // A flyTo from "add customer" can still be in the air. Its centre is a
-    // moving target: a pin seeded from it is left behind by the rest of the
-    // animation and ends up off-screen. Freeze the map where he can see it, and
-    // give the target back - he interrupted the flight on purpose, so nothing
-    // should fly to it later. FlyToTarget's own contract is untouched: it is
-    // still the only thing that flies, and it still consumes on arrival.
+    // moving target, and placement is about a fixed one. Freeze the map where he
+    // can see it, and give the target back - he interrupted the flight on
+    // purpose, so nothing should fly to it later. FlyToTarget's own contract is
+    // untouched: it is still the only thing that flies, and it still consumes on
+    // arrival.
     map.stop()
     onFlyConsumed()
     const existing =
       next.mode === 'existing' ? customers.find((c) => c.id === next.customerId) : null
-    // He may already have a pin that is simply not trustworthy (a town or road
-    // centroid). Start from it rather than from wherever the map is: the job is
-    // to move that pin onto the lid, not to find the property all over again.
-    // No animation - getCenter below must read the view he is actually given.
-    if (existing && hasLocation(existing)) {
-      map.setView([existing.lat, existing.lng], zoomForPrecision(existing.locationPrecision), {
-        animate: false,
-      })
-    }
-    const c = map.getCenter()
-    setDraftPin({ lat: c.lat, lng: c.lng, placed: false })
-    setDraftType(null)
-    setDraftName('')
-    setDraftAddress('')
+    const here = map.getCenter()
+    const returnTo = { center: [here.lat, here.lng], zoom: map.getZoom() }
+    const view = placementView(existing, returnTo)
+    showSatellite(map)
+    // No animation: the session's origin has to be the view he is actually
+    // given, or the tail of the animation reads as him aiming.
+    map.setView(view.center, view.zoom, { animate: false })
     setSelectedId(null) // close any open customer card
     setListOpen(false)
-    setPlacing(next)
-    // On touch devices start in the locate step (map only, no form); on
-    // desktop the side panel shows immediately as before.
-    setLocating(isTouch)
+    setNewPoint(null)
+    setDraftType(null)
+    setDraftName('')
+    setDraftAddress('')
+    setPlacing({
+      ...next,
+      origin: { lat: view.center[0], lng: view.center[1] },
+      confirmable: view.confirmable,
+      moved: false,
+      returnTo,
+    })
   }
 
-  function resetDraft() {
+  function resetPlacing() {
     setPlacing(null)
-    setLocating(false)
-    setDraftPin(null)
+    setNewPoint(null)
     setDraftType(null)
     setDraftName('')
     setDraftAddress('')
   }
 
-  // Placing the first pin for someone who already exists. This is an update and
-  // only an update: it touches his coordinates and nothing else.
-  function savePlacedPin() {
-    onUpdateCustomer(placingCustomer.id, manualLocationPatch(draftPin))
-    setToast(`Lid pinned for ${placingCustomer.name}`)
-    resetDraft()
+  // Cancel writes nothing, so the only thing there is to put back is the view
+  // placement took him away from - which it zoomed and switched to satellite
+  // without asking. Leaving him at zoom 19 over a stranger's roof after he said
+  // no is its own small betrayal.
+  function cancelPlacing() {
+    if (placing) mapRef.current?.setView(placing.returnTo.center, placing.returnTo.zoom)
+    resetPlacing()
   }
 
-  function savePin() {
+  const crosshairPoint = () => {
+    const c = mapRef.current.getCenter()
+    return { lat: c.lat, lng: c.lng }
+  }
+
+  // Moving (or first placing) the pin of a customer who already exists. This is
+  // an update and only an update: it touches his coordinates and nothing else -
+  // and it is reversible for ten seconds, because the operator who is afraid of
+  // breaking his own book is the one who never touches the map at all.
+  function savePlacedPin() {
+    const c = placingCustomer
+    const before = pinSnapshot(c)
+    onUpdateCustomer(c.id, manualLocationPatch(crosshairPoint()))
+    setToast({ message: `Pin saved for ${c.name}`, undo: { id: c.id, patch: before } })
+    // Stay where he is looking: the pin he just placed is under the crosshair.
+    resetPlacing()
+  }
+
+  function undoPin() {
+    onUpdateCustomer(toast.undo.id, toast.undo.patch)
+    setToast({ message: 'Pin put back' })
+  }
+
+  function saveNewCustomer() {
     onAddCustomer({
       name: draftName,
       address: draftAddress,
       phone: '',
       email: '',
-      // Placed by hand on the satellite image, which is the strongest signal
+      // Aimed at by hand on the satellite image, which is the strongest signal
       // this app has about where a lid actually is.
-      ...manualLocationPatch(draftPin),
+      ...manualLocationPatch(newPoint),
       tankSizeGal: 1000,
       lastPumped: todayISO(),
       cycleMonths: draftType === 'residential' ? 36 : 3,
       notes: '',
     })
-    setToast(`Lid pinned for ${draftName}`)
-    resetDraft()
+    setToast({ message: `Lid pinned for ${draftName}` })
+    resetPlacing()
   }
 
   // Hand the last view back to App on the way out. Read from a ref the map
@@ -390,7 +461,7 @@ export default function MapTab({
     mapRef.current?.invalidateSize()
     const t = setTimeout(() => mapRef.current?.invalidateSize(), 300)
     return () => clearTimeout(t)
-  }, [selectedId, placingPin, locating])
+  }, [selectedId, naming])
 
   return (
     <div className="relative h-full">
@@ -421,6 +492,7 @@ export default function MapTab({
           <LayersControl position="topright">
             <LayersControl.BaseLayer checked name="Satellite">
               <TileLayer
+                ref={satelliteRef}
                 key="satellite"
                 url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                 attribution="Tiles &copy; Esri"
@@ -429,57 +501,44 @@ export default function MapTab({
             </LayersControl.BaseLayer>
             <LayersControl.BaseLayer name="Map">
               <TileLayer
+                ref={streetRef}
                 key="street"
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
               />
             </LayersControl.BaseLayer>
           </LayersControl>
-          {/* Pins are draggable so the lid can be nudged onto the actual tank while
-              the customer is on the phone ("side of the house? here?"). On touch
-              only the open card's pin drags, the same way the draft pin waits for
-              its own step: otherwise a pan that starts on a pin would move it. */}
-          <PlacementClicks active={placingPin} onPlace={setDraftPin} />
-          {/* While placing a pin FOR someone, his own pin is not drawn: it sits
-              under the blue draft pin at the coordinate being replaced, and two
-              pins on one spot read as two customers. */}
-          {located
-            .filter((c) => c.id !== placing?.customerId)
-            .map((c) => (
+          <PlacementMap
+            active={aiming}
+            origin={placing?.origin}
+            onMoved={() => setPlacing((p) => (p && !p.moved ? { ...p, moved: true } : p))}
+          />
+          {/* No pin on this map is draggable, in either mode and on either kind
+              of screen. A drag and a pan are the same gesture, so a draggable pin
+              turns an accidental hand movement into a recorded human placement
+              that outranks the geocoder everywhere afterwards. Pins answer a
+              click by opening their customer's card, and that is all they do. */}
+          {located.map((c) => (
             <Marker
               key={c.id}
               position={[c.lat, c.lng]}
               icon={
                 needsPinConfirmation(c) ? UNCONFIRMED_ICONS[dueStatus(c)] : ICONS[dueStatus(c)]
               }
-              draggable={!isTouch || selectedId === c.id}
               eventHandlers={{
-                click: () => setSelectedId(c.id),
-                dragend: (e) => {
-                  const ll = e.target.getLatLng()
-                  // A human just put this pin where the lid is. That outranks any
-                  // geocoder guess, so record it as such.
-                  onUpdateCustomer(c.id, manualLocationPatch({ lat: ll.lat, lng: ll.lng }))
-                  setToast(`Lid moved for ${c.name}`)
+                click: () => {
+                  // While aiming, a pin is scenery: opening a card would bury
+                  // the crosshair under a sheet mid-placement.
+                  if (!placing) setSelectedId(c.id)
                 },
               }}
             />
           ))}
-          {placingPin && draftPin && (
-            <Marker
-              draggable={!isTouch || mobileLocate}
-              position={[draftPin.lat, draftPin.lng]}
-              icon={DRAFT_ICON}
-              eventHandlers={{
-                dragend: (e) => {
-                  const ll = e.target.getLatLng()
-                  setDraftPin({ lat: ll.lat, lng: ll.lng, placed: true })
-                },
-              }}
-            />
+          {naming && (
+            <Marker position={[newPoint.lat, newPoint.lng]} icon={DRAFT_ICON} interactive={false} />
           )}
         </MapContainer>
-        {!(placingPin && isTouch) &&
+        {!placing &&
           (showList ? (
             <NeedsPinList
               customers={needsPin}
@@ -495,42 +554,23 @@ export default function MapTab({
               hiddenOnMobile={sheetOpen}
             />
           ))}
-        {/* Whose pin is this? The banner answers that for the whole placement,
-            including the mobile step where no panel is on screen. */}
-        {(mobileLocate || (placingPin && !isTouch)) && (
-          <div className="absolute top-3 left-1/2 z-[1100] max-w-[calc(100vw-1.5rem)] -translate-x-1/2 rounded-2xl bg-gray-900 px-4 py-2 text-center text-sm font-semibold text-white shadow-lg">
-            {placingCustomer ? (
-              <>
-                <div className="text-base">Placing pin for {placingCustomer.name}</div>
-                {placingCustomer.address && (
-                  <div className="font-normal text-gray-300">
-                    {placingCustomer.address}
-                  </div>
-                )}
-                <div className="font-normal">
-                  Tap his lid, or drag the blue pin onto it, then save.
-                </div>
-              </>
-            ) : mobileLocate ? (
-              'Tap the lid, or drag the pin onto it'
-            ) : (
-              'Tap the lid, or drag the blue pin onto it, then pick a service type below.'
-            )}
-          </div>
+        {aiming && (
+          <PinPlacer
+            title={
+              placingCustomer
+                ? `Placing pin for ${placingCustomer.name}`
+                : 'Placing a new lid pin'
+            }
+            address={placingCustomer?.address}
+            canSave={canSavePlacement(placing)}
+            saveLabel={placingCustomer ? 'Save pin here' : 'Use this spot'}
+            onSave={
+              placingCustomer ? savePlacedPin : () => setNewPoint(crosshairPoint())
+            }
+            onCancel={cancelPlacing}
+          />
         )}
-        {/* Disabled until the pin is on the lid, and it says so. This step exists
-            for exactly one purpose; tapping through it would carry the middle of
-            the map into the next step as if it had been chosen. */}
-        {mobileLocate && (
-          <button
-            onClick={() => setLocating(false)}
-            disabled={!pinPlaced}
-            className="fixed inset-x-0 bottom-0 z-[1200] w-full bg-blue-700 py-4 text-lg font-bold text-white disabled:bg-gray-400"
-          >
-            {pinPlaced ? 'Next →' : 'Tap the lid to place the pin'}
-          </button>
-        )}
-        {!placingPin && !selected && (
+        {!placing && !selected && (
           <button
             onClick={() => beginPlacing({ mode: 'new' })}
             className="absolute bottom-6 right-3 z-[1100] rounded-2xl bg-blue-700 px-5 py-3 text-base font-bold text-white shadow-lg hover:bg-blue-800"
@@ -539,25 +579,18 @@ export default function MapTab({
           </button>
         )}
       </div>
-      {selected && !placingPin && (
+      {selected && !placing && (
         <CustomerCard
           customer={selected}
           onClose={() => setSelectedId(null)}
           onUpdate={(patch) => onUpdateCustomer(selected.id, patch)}
+          onMovePin={() => beginPlacing({ mode: 'existing', customerId: selected.id })}
         />
       )}
-      {/* Two panels, one entry point each, and the one reached from "No pin yet"
-          is not wired to onAddCustomer at all. That is why placing a pin for an
-          existing customer cannot produce a second copy of him. */}
-      {placingCustomer && !mobileLocate && (
-        <PlaceLidPanel
-          customer={placingCustomer}
-          pinPlaced={pinPlaced}
-          onConfirm={savePlacedPin}
-          onCancel={resetDraft}
-        />
-      )}
-      {placing?.mode === 'new' && !mobileLocate && (
+      {/* The only panel wired to onAddCustomer, and it is only reachable from
+          the FAB. That is why placing a pin for an existing customer cannot
+          produce a second copy of him. */}
+      {naming && (
         <NewLidPanel
           draftType={draftType}
           onPickType={setDraftType}
@@ -565,13 +598,19 @@ export default function MapTab({
           onName={setDraftName}
           address={draftAddress}
           onAddress={setDraftAddress}
-          pinPlaced={pinPlaced}
-          canSave={draftName.trim() !== '' && draftType !== null && pinPlaced}
-          onSave={savePin}
-          onCancel={resetDraft}
+          canSave={draftName.trim() !== '' && draftType !== null}
+          onSave={saveNewCustomer}
+          onBack={() => setNewPoint(null)}
+          onCancel={cancelPlacing}
         />
       )}
-      {toast && <Toast message={toast} />}
+      {toast && (
+        <Toast
+          message={toast.message}
+          actionLabel="Undo"
+          onAction={toast.undo ? undoPin : undefined}
+        />
+      )}
     </div>
   )
 }

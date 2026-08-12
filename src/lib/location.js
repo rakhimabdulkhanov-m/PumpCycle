@@ -144,3 +144,80 @@ export function manualLocationPatch(point, now = Date.now()) {
     locationConfirmedAt: now,
   }
 }
+
+/**
+ * The exact inverse of manualLocationPatch: everything about a customer that a
+ * pin placement overwrites, as a patch that puts it all back.
+ *
+ * This is what Undo applies. It is a snapshot of VALUES, not a closure, on
+ * purpose - the undo button lives for ten seconds, and a patch built now and
+ * applied later through the current write funnel cannot revert anything else the
+ * operator did in the meantime. The five keys are the whole footprint of a
+ * placement: the two coordinates, the label saying where they came from, the
+ * moment a human vouched for them, and the address-changed flag a placement
+ * silently answers by out-dating it.
+ */
+export function pinSnapshot(c) {
+  return {
+    lat: c.lat ?? null,
+    lng: c.lng ?? null,
+    locationPrecision: c.locationPrecision || '',
+    locationConfirmedAt: c.locationConfirmedAt ?? null,
+    addressChangedAt: c.addressChangedAt ?? null,
+  }
+}
+
+/**
+ * A lid is about a metre across and only exists in satellite imagery, so
+ * placement mode gets in close whether he asked for it or not. Below this he is
+ * pointing at a roof, or at a field, and calling the result "placed by hand".
+ */
+export const MIN_PLACEMENT_ZOOM = 18
+
+/**
+ * Where the map should be standing when placement mode opens, and whether the
+ * spot it opens on is one he may save without moving anything.
+ *
+ * A customer whose pin is already settled (hand-placed, or a house-level
+ * geocode) opens on that pin: the crosshair sits on the coordinate he is being
+ * asked about, and pressing Save is him saying "yes, that is the lid". A
+ * customer with no pin, or with a town / road / never-checked pin, has no such
+ * coordinate - a town centroid under the crosshair is not a lid - so `Save`
+ * stays shut until the map has actually moved under him.
+ */
+export function placementView(customer, current) {
+  if (customer && hasLocation(customer) && pinConfirmCase(customer) === null) {
+    return {
+      center: [customer.lat, customer.lng],
+      zoom: Math.max(MIN_PLACEMENT_ZOOM, zoomForPrecision(customer.locationPrecision)),
+      confirmable: true,
+    }
+  }
+  // An unsettled pin still beats the current view as a starting point: it puts
+  // him in the right town or on the right road, which is where the hunt starts.
+  const from = customer && hasLocation(customer)
+  return {
+    center: from ? [customer.lat, customer.lng] : current.center,
+    zoom: Math.max(MIN_PLACEMENT_ZOOM, from ? zoomForPrecision(customer.locationPrecision) : current.zoom),
+    confirmable: false,
+  }
+}
+
+/** Under this, the map has not moved - it settled back where it started. */
+export const PLACEMENT_MOVE_METERS = 2
+
+/** Save is a claim about a lid. Either he aimed, or he confirmed a settled pin. */
+export const canSavePlacement = (session) =>
+  !!session && (session.confirmable || session.moved)
+
+/**
+ * Where the pin came from, in one word, for the customer card.
+ *
+ * Everything unsettled is pinConfirmCase's answer, unchanged - that function
+ * stays the only place that decides whether a pin is trustworthy. This only adds
+ * the two settled cases it collapses into null: a human put it there, or an
+ * address lookup did.
+ */
+export function pinSource(c) {
+  return pinConfirmCase(c) || (c.locationPrecision === 'manual' ? 'placed' : 'lookup')
+}
