@@ -23,22 +23,26 @@ export function todayISO() {
 // An unknown zone throws RangeError out of Intl rather than quietly becoming
 // UTC, which is the behaviour we want: a misconfigured tenant must fail loudly,
 // not mail at the wrong hour forever.
-export function todayISOInZone(timeZone) {
+// `at` is an epoch-ms moment, defaulting to now. A caller that makes several
+// decisions from one clock reading must pass the same `at` to all of them: a
+// run starting at 09:59:59.9 would otherwise read hour 9 here and tomorrow's
+// date a few milliseconds later.
+export function todayISOInZone(timeZone, at = Date.now()) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).format(new Date())
+  }).format(new Date(at))
 }
 
-// The hour (0-23) it currently is in a named IANA zone.
-export function hourInZone(timeZone) {
+// The hour (0-23) in a named IANA zone at the given moment.
+export function hourInZone(timeZone, at = Date.now()) {
   const hour = new Intl.DateTimeFormat('en-US', {
     timeZone,
     hour: '2-digit',
     hour12: false,
-  }).format(new Date())
+  }).format(new Date(at))
   // 'en-US' renders midnight as '24' in some ICU versions; normalise to 0.
   return Number(hour) % 24
 }

@@ -97,7 +97,7 @@ describe('login, origin and lockout', () => {
     expect(row.failed_attempts).toBe(6)
     expect(row.locked_until).toBeGreaterThan(Date.now())
     expect((await post('/api/auth/login', { email: account.email, password: account.password })).status).toBe(401)
-  }, 15_000)
+  }, 45_000)
 
   it('successful login clears counters and returns a safe session', async () => {
     const account = await user({ failedAttempts: 4 })
@@ -122,7 +122,7 @@ describe('login, origin and lockout', () => {
     const locked = await db().prepare('SELECT failed_attempts, locked_until FROM users WHERE id = ?').bind(account.id).first()
     expect(locked.failed_attempts).toBe(6)
     expect(locked.locked_until).toBeGreaterThan(Date.now())
-  }, 15_000)
+  }, 45_000)
 
   it('atomically preserves the lock when wrong attempts race at the threshold', async () => {
     const account = await user({ failedAttempts: 5 })
@@ -172,7 +172,7 @@ describe('setup, protected routes and session lifecycle', () => {
     expect((await db().prepare('SELECT COUNT(*) AS n FROM sessions WHERE user_id = ? AND revoked_at IS NULL').bind(account.id).first()).n).toBe(1)
     expect((await SELF.fetch(`${ORIGIN}/api/auth/session`, { headers: { cookie: `__Host-pumpcycle_session=${winnerToken}` } })).status).toBe(200)
     expect((await SELF.fetch(`${ORIGIN}/api/auth/session`, { headers: { cookie: `__Host-pumpcycle_session=${oldToken}` } })).status).toBe(401)
-  }, 15_000)
+  }, 45_000)
 
   it('rejects expired setup links', async () => {
     const raw = 'c'.repeat(64)

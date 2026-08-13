@@ -12,6 +12,19 @@ export default defineConfig(async () => {
 
   return {
     test: {
+      // 30s, not the 5s default.
+      //
+      // Two kinds of test here are slow by design, not by accident: the auth
+      // suite runs PBKDF2 at 210,000 iterations several times per case (the
+      // work factor IS the security property - lowering it to make tests quick
+      // would be lowering it in production), and the CLI tests spawn real Node
+      // processes. Both sat just inside the old limits until the reminder suite
+      // was added, then began timing out under parallel load - a different pair
+      // failing on each run, which is the signature of contention rather than a
+      // defect. Raising the ceiling is the honest fix; making the crypto cheaper
+      // is not.
+      testTimeout: 30_000,
+      hookTimeout: 30_000,
       projects: [
         // Pure logic: runs under Node, no browser or worker environment.
         {
@@ -23,6 +36,10 @@ export default defineConfig(async () => {
             name: 'node',
             include: ['test/lib/**/*.test.js'],
             environment: 'node',
+            // Repeated here rather than inherited: a project's `test` block does
+            // not reliably pick up root-level options.
+            testTimeout: 30_000,
+            hookTimeout: 30_000,
           },
         },
         // Worker tests: run inside workerd via Miniflare. cloudflareTest() is the
@@ -65,6 +82,8 @@ export default defineConfig(async () => {
             name: 'workers',
             include: ['test/worker/**/*.test.js'],
             setupFiles: ['./test/worker/apply-migrations.js'],
+            testTimeout: 30_000,
+            hookTimeout: 30_000,
           },
         },
       ],

@@ -22,6 +22,14 @@
     "enabled": true
   },
 
+  // Hourly, NOT once a day. A single daily UTC trigger is 9am Eastern in summer
+  // and 8am in winter, bakes one client's timezone into deploy config, and makes
+  // a missed run wait 24 hours. The handler returns immediately unless the
+  // tenant's own local hour matches its reminder_send_hour setting.
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
+
   // Public unauthenticated endpoint that triggers an outbound fetch -> amplification target.
   // 3 requests / 60s per client IP. period must be 10 or 60 (wrangler schema enum).
   "ratelimits": [

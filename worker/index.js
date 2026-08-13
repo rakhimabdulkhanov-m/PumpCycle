@@ -1,6 +1,7 @@
 import { resolveTenant } from './tenants.js'
 import { isApiPath, handleApi } from './router.js'
 import { json } from './lib/json.js'
+import { runReminderCron } from './lib/reminder_send.js'
 
 /**
  * Single Worker with Static Assets.
@@ -44,5 +45,34 @@ export default {
     }
 
     return env.ASSETS.fetch(request)
+  },
+
+  /**
+   * Hourly reminder cron (wrangler.jsonc: triggers.crons).
+   *
+   * There is no request here, so there is no hostname, so the tenant cannot be
+   * resolved the way every other entry point resolves it. runReminderCron
+   * iterates the static LIVE_TENANTS map instead - see worker/lib/reminder_send.js
+   * for why that is the only safe option.
+   *
+   * ctx.waitUntil rather than a bare await: the handler must not be torn down
+   * mid-send, and a reminder killed between its claim and its send would sit in
+   * 'sending' until the reaper picks it up 15 minutes later.
+   *
+   * Nothing throws out of here. An unhandled rejection in a scheduled handler is
+   * an alert with no context; a logged error names the tenant.
+   */
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(
+      runReminderCron(env)
+        .then((outcomes) => {
+          for (const outcome of outcomes) {
+            console.log('reminder cron', outcome.host, outcome.status, outcome.detail || '')
+          }
+        })
+        .catch((err) => {
+          console.error('reminder cron failed', controller?.cron || '', err)
+        })
+    )
   },
 }
