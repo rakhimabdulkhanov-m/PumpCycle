@@ -4,6 +4,7 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { dueStatus, todayISO } from '../lib/dates.js'
 import { hasLocation } from '../lib/point.js'
+import { useDismissLayer } from '../lib/dismissLayer.js'
 import {
   customersNeedingPin,
   manualLocationPatch,
@@ -676,6 +677,10 @@ export default function MapTab({
     if (placing) mapRef.current?.setView(placing.returnTo.center, placing.returnTo.zoom)
     resetPlacing()
   }
+
+  // Back out of an aiming session the way Cancel does - writing nothing and
+  // putting the view back - rather than out of the app.
+  useDismissLayer(!!placing, cancelPlacing)
 
   const crosshairPoint = () => {
     const c = mapRef.current.getCenter()

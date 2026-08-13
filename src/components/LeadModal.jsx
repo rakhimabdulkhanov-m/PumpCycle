@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useDismissLayer } from '../lib/dismissLayer.js'
 
 const inputCls =
   'mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-lg focus:border-blue-600 focus:outline-none'
@@ -6,6 +7,8 @@ const inputCls =
 export default function LeadModal({ open, onClose }) {
   const [form, setForm] = useState({ name: '', contact: '', website: '' })
   const [status, setStatus] = useState('idle') // idle | sending | done | error
+
+  useDismissLayer(open, onClose)
 
   if (!open) return null
 

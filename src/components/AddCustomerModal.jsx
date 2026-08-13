@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { geocodeAddress } from '../lib/geocode.js'
 import { zoomForPrecision } from '../lib/location.js'
 import { compactMatchedAddress, isAddCustomerDraftDirty } from '../lib/addCustomerDraft.js'
+import { useDismissLayer } from '../lib/dismissLayer.js'
 
 const inputCls =
   'mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-lg focus:border-blue-600 focus:outline-none'
@@ -224,6 +225,12 @@ export default function AddCustomerModal({
     if (dirty) setConfirmDiscard(true)
     else onClose()
   }
+
+  // Back/Escape ask the same question the X asks, so a draft cannot be lost by
+  // the gesture a phone user reaches for first. The confirmation registers its
+  // own layer, so a second Back over it means "keep editing".
+  useDismissLayer(!confirmDiscard, requestClose)
+  useDismissLayer(confirmDiscard, () => setConfirmDiscard(false))
 
   const precisionCopy = hit ? PRECISION_COPY[hit.precision] : null
 

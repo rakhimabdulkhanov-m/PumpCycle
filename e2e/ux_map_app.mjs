@@ -278,6 +278,152 @@ async function dueNavigation(browser) {
   await context.close()
 }
 
+// The customer sheet is about 500px tall on a 390x780 phone. Its actions used to
+// live at the end of the scrolling body, behind address, phone, tank, cycle and
+// notes, so every "mark pumped" began with a scroll. They are a fixed footer now.
+async function cardActionsReachable(browser) {
+  const { context, page, errors } = await openCase(
+    browser,
+    [customer('reach', 'Reach Actions')],
+    { width: 390, height: 780 }
+  )
+  const onScreen = async (label, where) => {
+    const box = await page.getByRole('button', { name: label, exact: true }).boundingBox()
+    assert(box, `${label} must exist ${where}`)
+    assert(box.y >= 0 && box.y + box.height <= 780, `${label} must be on screen ${where} without scrolling`)
+    assert(box.height >= 44, `${label} must stay a thumb target ${where}`)
+  }
+
+  await page.getByRole('button', { name: 'Due list' }).click()
+  await page.getByRole('button', { name: /Reach Actions/ }).click()
+  await onScreen('Mark pumped today', 'on the Due card')
+  await onScreen('Show on map', 'on the Due card')
+  await onScreen('Edit', 'on the Due card')
+  // The footer must not have eaten the card: what he opened it to read is still
+  // the first thing under the name.
+  assert.equal(
+    await page.getByText('reach Test Road, Dallas, NC 28034', { exact: true }).isVisible(),
+    true
+  )
+
+  await page.getByRole('button', { name: 'Edit', exact: true }).click()
+  await onScreen('Save', 'in edit mode')
+  await onScreen('Cancel', 'in edit mode')
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+
+  await page.getByRole('button', { name: 'Show on map' }).click()
+  await page.getByRole('heading', { name: 'Reach Actions' }).waitFor()
+  await onScreen('Mark pumped today', 'on the Map card')
+  await onScreen('Move pin', 'on the Map card')
+  await onScreen('Edit', 'on the Map card')
+  assert.deepEqual(errors, [])
+  await context.close()
+}
+
+// Back is how a phone says "close this". This app has no routes, so Back used to
+// leave PumpCycle - and over a half-typed customer it threw the typing away
+// without the question the X button asks.
+async function backAndEscapeDismissLayers(browser) {
+  const { context, page, errors } = await openCase(browser, [customer('base', 'Base Customer')])
+
+  await page.getByRole('button', { name: 'Due list' }).click()
+  await page.getByRole('button', { name: /Base Customer/ }).click()
+  await page.goBack()
+  await page.getByRole('heading', { name: 'Base Customer', exact: true }).waitFor({ state: 'detached' })
+  assert.equal(await page.getByRole('button', { name: /Add customer/ }).isVisible(), true, 'Back closed the card, not the app')
+
+  await page.getByRole('button', { name: /Base Customer/ }).click()
+  await page.keyboard.press('Escape')
+  await page.getByRole('heading', { name: 'Base Customer', exact: true }).waitFor({ state: 'detached' })
+
+  await page.getByRole('button', { name: /Add customer/ }).click()
+  await page.getByLabel('Name').fill('Back Draft')
+  await page.getByLabel('Notes').fill('green lid')
+  await page.goBack()
+  await page.getByRole('heading', { name: 'Discard this customer?' }).waitFor()
+  // A second Back over the question means keep editing, never leave the app.
+  await page.goBack()
+  await page.getByRole('heading', { name: 'Discard this customer?' }).waitFor({ state: 'detached' })
+  assert.equal(await page.getByLabel('Notes').inputValue(), 'green lid', 'Back never discards a draft')
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await page.getByRole('button', { name: 'Close and keep draft' }).click()
+
+  // Placement: Back is Cancel, so it writes nothing and gives the view back.
+  await page.getByRole('button', { name: /Base Customer/ }).click()
+  await page.getByRole('button', { name: 'Show on map' }).click()
+  await page.getByRole('button', { name: 'Move pin' }).click()
+  await page.getByTestId('placing-name').filter({ hasText: 'Base Customer' }).waitFor()
+  await page.goBack()
+  await page.getByTestId('placing-name').waitFor({ state: 'detached' })
+  const unchanged = (await stored(page)).customers.find((row) => row.id === 'base')
+  assert.deepEqual([unchanged.lat, unchanged.lng], [35.3412, -81.1893], 'Back out of placement writes nothing')
+  assert.deepEqual(errors, [])
+  await context.close()
+}
+
+// Both cases below are regressions for defects a verifier found in the first
+// version of the Back guard, and neither could have been caught by reading the
+// code: history.back() is an asynchronous traversal, so the bugs are races.
+//
+// One: an ordinary Cancel out of a lid placement threw the operator clean out of
+// PumpCycle about one run in five, with no Back press anywhere. The loop runs
+// twelve times because a 20-30% per-iteration failure is a coin toss once.
+async function placementCancelStaysInApp(browser) {
+  const { context, page, errors } = await openCase(browser, [customer('base', 'Base Customer')])
+  const appUrl = page.url()
+  for (let round = 0; round < 12; round += 1) {
+    await page.getByRole('button', { name: 'Due list' }).click()
+    await page.getByRole('button', { name: /Base Customer/ }).click()
+    await page.getByRole('button', { name: 'Show on map' }).click()
+    await page.getByRole('button', { name: 'Move pin' }).click()
+    await page.getByTestId('placing-name').filter({ hasText: 'Base Customer' }).waitFor()
+    await page.getByRole('button', { name: 'Cancel' }).click()
+    await page.waitForTimeout(30)
+    assert.equal(page.url(), appUrl, `Cancel must not navigate (round ${round})`)
+    await page.getByRole('button', { name: 'Due list' }).waitFor()
+  }
+  assert.deepEqual(errors, [])
+  await context.close()
+}
+
+// Two: a reload with a layer open used to leave the guard entry behind, so the
+// operator's next Back was a press that did nothing.
+async function reloadLeavesNoDeadBackPress(browser) {
+  const { context, page, errors } = await openCase(browser, [customer('base', 'Base Customer')])
+  const appUrl = page.url()
+  const openers = [
+    async () => {
+      await page.getByRole('button', { name: 'Due list' }).click()
+      await page.getByRole('button', { name: /Base Customer/ }).click()
+    },
+    async () => {
+      await page.getByRole('button', { name: 'Due list' }).click()
+      await page.getByRole('button', { name: /Add customer/ }).click()
+    },
+    async () => {
+      await page.getByRole('button', { name: 'Due list' }).click()
+      await page.getByRole('button', { name: /Base Customer/ }).click()
+      await page.getByRole('button', { name: 'Show on map' }).click()
+      await page.getByRole('button', { name: 'Move pin' }).click()
+      await page.getByTestId('placing-name').waitFor()
+    },
+  ]
+  for (const [index, open] of openers.entries()) {
+    await page.goto(appUrl)
+    await open()
+    await page.reload()
+    await page.locator('text=PumpCycle').first().waitFor()
+    await page.waitForTimeout(120)
+    await page.goBack()
+    await page.waitForTimeout(120)
+    assert.notEqual(page.url(), appUrl, `one Back after a reload must leave the app (opener ${index})`)
+  }
+  // Leaving the app lands on about:blank, where this file's own seeding init
+  // script cannot touch localStorage. That error is the harness, not the app.
+  assert.deepEqual(errors.filter((line) => !/Failed to read the 'localStorage'/.test(line)), [])
+  await context.close()
+}
+
 async function liveBootstrapBlocksDemoData(browser) {
   const context = await browser.newContext({ viewport: { width: 390, height: 780 }, hasTouch: true })
   await context.addInitScript(({ today, customerSeed }) => {
@@ -302,11 +448,19 @@ async function liveBootstrapBlocksDemoData(browser) {
       timezone: 'America/New_York',
     }),
   }))
+  // Step 1B: a live host with no session answers 401 here and the app shows its
+  // sign-in gate. Before auth existed this case ended on the "not ready to open
+  // yet" placeholder; the assertion moved with the product, the point did not.
+  await context.route('**/api/auth/session', (route) => route.fulfill({
+    status: 401,
+    contentType: 'application/json',
+    body: JSON.stringify({ ok: false, error: 'unauthenticated' }),
+  }))
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', (error) => errors.push(String(error)))
   await page.goto(BASE)
-  await page.getByRole('heading', { name: 'PumpCycle Dev is not ready to open yet' }).waitFor()
+  await page.getByRole('heading', { name: 'Sign in' }).waitFor()
   assert.equal(await page.getByText('Demo Data Must Not Render').count(), 0)
   assert.equal(await page.getByText('Demo mode').count(), 0)
   assert.equal(await page.getByRole('button', { name: /Get this/ }).count(), 0)
@@ -389,11 +543,15 @@ try {
   await addPlacementCase(browser, { name: 'Far Accepted', address: 'Far Result', precision: 'house', acceptFar: true })
   await pendingAndRace(browser)
   await dueNavigation(browser)
+  await cardActionsReachable(browser)
+  await backAndEscapeDismissLayers(browser)
+  await placementCancelStaysInApp(browser)
+  await reloadLeavesNoDeadBackPress(browser)
   await liveBootstrapBlocksDemoData(browser)
   await desktopOverdueJob(browser)
   await desktopReminderJob(browser)
   await desktopAddRouting(browser)
-  console.log('PASS ux_map_app: 20 maintained browser cases')
+  console.log("PASS ux_map_app: 24 maintained browser cases")
 } finally {
   await browser.close()
 }

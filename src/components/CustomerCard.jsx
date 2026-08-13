@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { nextDue, daysUntilDue, dueStatus, formatDate, isCommercial } from '../lib/dates.js'
 import { pinSource } from '../lib/location.js'
+import { useDismissLayer } from '../lib/dismissLayer.js'
 
 const STATUS_STYLES = {
   overdue: 'bg-red-100 text-red-800',
@@ -74,6 +75,10 @@ export default function CustomerCard({
   useEffect(() => {
     bodyRef.current.scrollTop = 0
   }, [editing])
+
+  // Back on a phone, Escape on a desktop: leave the edit form first, then the
+  // card. Neither ever walks out of the app.
+  useDismissLayer(true, () => (editing ? setEditing(false) : onClose()))
 
   const status = dueStatus(customer)
   const source = pinSource(customer)
@@ -197,7 +202,7 @@ export default function CustomerCard({
           <Row label="Notes">{customer.notes}</Row>
 
           {/* Overdue customers have no auto-reminder by design, so give the
-              operator a manual nudge path — only for contacts that exist. */}
+              operator a manual nudge path - only for contacts that exist. */}
           {status === 'overdue' && (customer.phone || customer.email) && (
             <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg bg-red-50 px-3 py-2">
               <span className="text-base font-semibold text-red-800">
@@ -222,41 +227,6 @@ export default function CustomerCard({
             </div>
           )}
 
-          <div className="mt-4 flex flex-col gap-2">
-            <button
-              onClick={markPumped}
-              disabled={!!savingAction}
-              className="w-full rounded-lg bg-green-700 px-4 py-3 text-lg font-semibold text-white hover:bg-green-800 disabled:opacity-60"
-            >
-              {savingAction === 'pumped' ? 'Saving...' : 'Mark pumped today'}
-            </button>
-            {onMapAction && (
-              <button
-                onClick={onMapAction}
-                className="w-full rounded-lg bg-blue-700 px-4 py-3 text-lg font-semibold text-white hover:bg-blue-800"
-              >
-                {hasPin ? 'Show on map' : 'Place pin on map'}
-              </button>
-            )}
-            {/* The one entrance to placing or moving a pin: named, and pressed on
-                purpose. Nothing on the map itself can start it, which is why a
-                pan can no longer move a customer's lid. Absent on the Due tab,
-                where this card opens with no map behind it to aim on. */}
-            {onMovePin && (
-              <button
-                onClick={onMovePin}
-                className="w-full rounded-lg bg-blue-700 px-4 py-3 text-lg font-semibold text-white hover:bg-blue-800"
-              >
-                {hasPin ? 'Move pin' : 'Place pin'}
-              </button>
-            )}
-            <button
-              onClick={startEdit}
-              className="w-full rounded-lg border-2 border-gray-300 px-4 py-3 text-lg font-semibold text-gray-700 hover:bg-gray-100"
-            >
-              Edit
-            </button>
-          </div>
         </>
       )}
 
@@ -316,28 +286,77 @@ export default function CustomerCard({
             />
           </Field>
 
-          <div className="mt-4 flex gap-2">
+        </>
+      )}
+      </div>
+
+      {/* The actions sit outside the scrolling body on purpose. On a 390x780
+          phone this sheet is about 500px tall, so a stack at the end of the
+          address, phone, tank, cycle and notes was never on screen when the card
+          opened: every "mark pumped" and every "show on map" started with a
+          scroll past reference data he was not reading. */}
+      <div className="border-t border-gray-200 p-4 pt-3">
+        {/* Beside the button that failed, not at the end of a scroll. */}
+        {writeError && (
+          <p role="alert" className="mb-2 text-base font-semibold text-red-700">
+            {writeError}
+          </p>
+        )}
+        {!editing ? (
+          <div className="flex flex-col gap-2">
+            <button
+              onClick={markPumped}
+              disabled={!!savingAction}
+              className="min-h-12 w-full rounded-lg bg-green-700 px-4 py-3 text-lg font-semibold text-white hover:bg-green-800 disabled:opacity-60"
+            >
+              {savingAction === 'pumped' ? 'Saving...' : 'Mark pumped today'}
+            </button>
+            <div className="flex gap-2">
+              {onMapAction && (
+                <button
+                  onClick={onMapAction}
+                  className="min-h-12 flex-1 rounded-lg bg-blue-700 px-3 py-3 text-lg font-semibold text-white hover:bg-blue-800"
+                >
+                  {hasPin ? 'Show on map' : 'Place pin on map'}
+                </button>
+              )}
+              {/* The one entrance to placing or moving a pin: named, and pressed
+                  on purpose. Nothing on the map itself can start it, which is why
+                  a pan can no longer move a customer's lid. Absent on the Due
+                  tab, where this card opens with no map behind it to aim on. */}
+              {onMovePin && (
+                <button
+                  onClick={onMovePin}
+                  className="min-h-12 flex-1 rounded-lg bg-blue-700 px-3 py-3 text-lg font-semibold text-white hover:bg-blue-800"
+                >
+                  {hasPin ? 'Move pin' : 'Place pin'}
+                </button>
+              )}
+              <button
+                onClick={startEdit}
+                className="min-h-12 flex-1 rounded-lg border-2 border-gray-300 px-3 py-3 text-lg font-semibold text-gray-700 hover:bg-gray-100"
+              >
+                Edit
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex gap-2">
             <button
               onClick={saveEdit}
               disabled={!!savingAction}
-              className="flex-1 rounded-lg bg-blue-700 px-4 py-3 text-lg font-semibold text-white hover:bg-blue-800 disabled:opacity-60"
+              className="min-h-12 flex-1 rounded-lg bg-blue-700 px-4 py-3 text-lg font-semibold text-white hover:bg-blue-800 disabled:opacity-60"
             >
               {savingAction === 'edit' ? 'Saving...' : 'Save'}
             </button>
             <button
               onClick={() => setEditing(false)}
-              className="flex-1 rounded-lg border-2 border-gray-300 px-4 py-3 text-lg font-semibold text-gray-700 hover:bg-gray-100"
+              className="min-h-12 flex-1 rounded-lg border-2 border-gray-300 px-4 py-3 text-lg font-semibold text-gray-700 hover:bg-gray-100"
             >
               Cancel
             </button>
           </div>
-        </>
-      )}
-      {writeError && (
-        <p role="alert" className="mt-3 text-base font-semibold text-red-700">
-          {writeError}
-        </p>
-      )}
+        )}
       </div>
     </div>
   )
