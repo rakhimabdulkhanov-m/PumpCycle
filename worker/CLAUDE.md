@@ -80,3 +80,19 @@ Never write a real credential into any file in the repo.
 Gated to demo hosts via `demoOnly: true` in the route table. Returns 404 on a live client host.
 This gate is not optional - `/api/lead` triggers an outbound Telegram fetch and must not be
 reachable on a paying client's production hostname.
+
+## Authentication
+
+Live sessions use the `__Host-pumpcycle_session` cookie. The raw 32-byte token is
+never stored; D1 stores its SHA-256 hash. Sessions have a 30-day absolute lifetime
+and a 14-day idle timeout. `last_seen_at` is refreshed at most hourly. A session is
+rotated after 24 hours, with a 60-second old-cookie grace window; rotation never
+extends the original absolute expiry.
+
+Passwords use PBKDF2-HMAC-SHA256 with 210,000 iterations, a 16-byte random salt,
+and a 32-byte derived hash. Account lockout begins after six failed attempts and
+lasts 15 minutes. Setup tokens are single-use and expire after 24 hours.
+
+Every unsafe live method requires exact `Origin` equality with the request URL.
+`/api/sync` and `/api/mutations` exist only as live, authenticated routes. Demo
+hosts return 404 for all auth/data routes and never read or set auth cookies.

@@ -346,9 +346,11 @@ describe('HTTP handler boundary', () => {
 
   it('returns the applied envelope with no-store on success', async () => {
     const mutation = envelope('customer.add', addPayload())
-    const response = await post(request(JSON.stringify(mutation)), {}, {}, { db: db() })
+    const response = await post(request(JSON.stringify(mutation)), {}, {}, { db: db() }, { user: { id: 'test-user' } })
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe('private, no-store')
     expect(await response.json()).toMatchObject({ ok: true, status: 'applied' })
+    expect(await row('SELECT user_id FROM applied_mutations WHERE mutation_id = ?', mutation.mutationId))
+      .toEqual({ user_id: 'test-user' })
   })
 })

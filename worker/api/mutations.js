@@ -143,29 +143,29 @@ function seqValue(count, index) {
   return `(SELECT value${offset ? ` - ${offset}` : ''} FROM seq_counter WHERE id = 1)`
 }
 
-function audit(db, now, entity, entityId, action, before, after) {
+function audit(db, now, actorUserId, entity, entityId, action, before, after) {
   return db
     .prepare(
       `INSERT INTO audit_log (at, actor, entity, entity_id, action, before_json, after_json)
-       VALUES (?, '', ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-    .bind(now, entity, entityId, action, JSON.stringify(before), JSON.stringify(after))
+    .bind(now, actorUserId, entity, entityId, action, JSON.stringify(before), JSON.stringify(after))
 }
 
-function applied(db, envelope, now, result) {
+function applied(db, envelope, now, actorUserId, result) {
   return db
     .prepare(
       `INSERT INTO applied_mutations (mutation_id, user_id, applied_at, result_json)
-       VALUES (?, '', ?, ?)`
+       VALUES (?, ?, ?, ?)`
     )
-    .bind(envelope.mutationId, now, JSON.stringify(result))
+    .bind(envelope.mutationId, actorUserId, now, JSON.stringify(result))
 }
 
 function ack(envelope) {
   return { mutationId: envelope.mutationId, type: envelope.type }
 }
 
-async function addCustomer(db, envelope, now) {
+async function addCustomer(db, envelope, now, actorUserId) {
   const p = envelope.payload
   exactKeys(
     p,
@@ -220,13 +220,13 @@ async function addCustomer(db, envelope, now) {
     )
   }
   const result = ack(envelope)
-  statements.push(audit(db, now, 'customer', customerId, envelope.type, null, after))
-  statements.push(applied(db, envelope, now, result))
+  statements.push(audit(db, now, actorUserId, 'customer', customerId, envelope.type, null, after))
+  statements.push(applied(db, envelope, now, actorUserId, result))
   await db.batch([reserveSeqs(db, seqCount), ...statements])
   return result
 }
 
-async function updateCustomer(db, envelope, now) {
+async function updateCustomer(db, envelope, now, actorUserId) {
   const p = envelope.payload
   exactKeys(p, ['customerId', 'changes'], 'payload', ['customerId', 'changes'])
   const customerId = id(p.customerId, 'payload.customerId')
@@ -274,13 +274,13 @@ async function updateCustomer(db, envelope, now) {
   await db.batch([
     reserveSeqs(db, 1),
     db.prepare(`UPDATE customers SET ${assignments.join(', ')} WHERE id = ?`).bind(...bindings),
-    audit(db, now, 'customer', customerId, envelope.type, snapshotCustomer(previous), after),
-    applied(db, envelope, now, result),
+    audit(db, now, actorUserId, 'customer', customerId, envelope.type, snapshotCustomer(previous), after),
+    applied(db, envelope, now, actorUserId, result),
   ])
   return result
 }
 
-async function changePin(db, envelope, now, restore) {
+async function changePin(db, envelope, now, restore, actorUserId) {
   const p = envelope.payload
   const keys = restore
     ? ['customerId', 'lat', 'lng', 'locationPrecision', 'locationConfirmedAt']
@@ -305,13 +305,13 @@ async function changePin(db, envelope, now, restore) {
       `UPDATE customers SET lat = ?, lng = ?, location_precision = ?,
        location_confirmed_at = ?, edited_in_app = 1, updated_at = ?, seq = ${seqValue(1, 0)} WHERE id = ?`
     ).bind(point.lat, point.lng, locationPrecision, locationConfirmedAt, now, customerId),
-    audit(db, now, 'customer', customerId, envelope.type, before, after),
-    applied(db, envelope, now, result),
+    audit(db, now, actorUserId, 'customer', customerId, envelope.type, before, after),
+    applied(db, envelope, now, actorUserId, result),
   ])
   return result
 }
 
-async function recordVisit(db, envelope, now) {
+async function recordVisit(db, envelope, now, actorUserId) {
   const p = envelope.payload
   const keys = ['id', 'customerId', 'visitedOn', 'gallons', 'priceCents', 'tech', 'notes']
   exactKeys(p, keys, 'payload', ['id', 'customerId', 'visitedOn'])
@@ -356,13 +356,13 @@ async function recordVisit(db, envelope, now) {
   )
   const visit = { id: visitId, customerId, visitedOn, setsLastPumped: true, gallons, priceCents, tech, notes }
   const result = ack(envelope)
-  statements.push(audit(db, now, 'visit', visitId, envelope.type, null, { visit, customer: after }))
-  statements.push(applied(db, envelope, now, result))
+  statements.push(audit(db, now, actorUserId, 'visit', visitId, envelope.type, null, { visit, customer: after }))
+  statements.push(applied(db, envelope, now, actorUserId, result))
   await db.batch([reserveSeqs(db, seqCount), ...statements])
   return result
 }
 
-async function correctLastPumped(db, envelope, now) {
+async function correctLastPumped(db, envelope, now, actorUserId) {
   const p = envelope.payload
   exactKeys(p, ['id', 'customerId', 'lastPumped'], 'payload', ['id', 'customerId', 'lastPumped'])
   const visitId = id(p.id, 'payload.id')
@@ -400,16 +400,16 @@ async function correctLastPumped(db, envelope, now) {
       `UPDATE customers SET last_pumped = ?, cycle_seq = cycle_seq + 1,
        edited_in_app = 1, updated_at = ?, seq = ${seqValue(seqCount, seqCount - 1)} WHERE id = ?`
     ).bind(lastPumped, now, customerId),
-    audit(db, now, 'customer', customerId, envelope.type,
+    audit(db, now, actorUserId, 'customer', customerId, envelope.type,
       { customer: snapshotCustomer(previous), drivingVisits: priorDrivers },
       { customer: after, drivingVisit: lastPumped ? visitId : null }),
-    applied(db, envelope, now, result),
+    applied(db, envelope, now, actorUserId, result),
   )
   await db.batch(statements)
   return result
 }
 
-async function setAvgJobPrice(db, envelope, now) {
+async function setAvgJobPrice(db, envelope, now, actorUserId) {
   const p = envelope.payload
   exactKeys(p, ['avgJobPriceCents'], 'payload', ['avgJobPriceCents'])
   const cents = integer(p.avgJobPriceCents, 'payload.avgJobPriceCents', { min: 1 })
@@ -420,14 +420,14 @@ async function setAvgJobPrice(db, envelope, now) {
       `INSERT INTO settings (key, value, updated_at) VALUES ('avg_job_price_cents', ?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
     ).bind(String(cents), now),
-    audit(db, now, 'setting', 'avg_job_price_cents', envelope.type,
+    audit(db, now, actorUserId, 'setting', 'avg_job_price_cents', envelope.type,
       { avgJobPriceCents: Number(previous?.value ?? 0) }, { avgJobPriceCents: cents }),
-    applied(db, envelope, now, result),
+    applied(db, envelope, now, actorUserId, result),
   ])
   return result
 }
 
-async function markManualSent(db, envelope, now) {
+async function markManualSent(db, envelope, now, actorUserId) {
   const p = envelope.payload
   exactKeys(p, ['customerId', 'reminderKey', 'channel'], 'payload', ['customerId', 'reminderKey', 'channel'])
   const customerId = id(p.customerId, 'payload.customerId')
@@ -455,8 +455,8 @@ async function markManualSent(db, envelope, now) {
         reminderId, customerId, p.reminderKey, current.cycle_seq, p.channel,
         p.channel === 'email' ? current.email : '', now, now
       ),
-      audit(db, now, 'reminder', reminderId, envelope.type, null, reminder),
-      applied(db, envelope, now, result),
+      audit(db, now, actorUserId, 'reminder', reminderId, envelope.type, null, reminder),
+      applied(db, envelope, now, actorUserId, result),
     ])
   } catch (error) {
     const stored = await replay(db, envelope.mutationId)
@@ -474,8 +474,8 @@ async function markManualSent(db, envelope, now) {
 const APPLY = {
   'customer.add': addCustomer,
   'customer.update': updateCustomer,
-  'pin.set': (db, envelope, now) => changePin(db, envelope, now, false),
-  'pin.restore': (db, envelope, now) => changePin(db, envelope, now, true),
+  'pin.set': (db, envelope, now, actorUserId) => changePin(db, envelope, now, false, actorUserId),
+  'pin.restore': (db, envelope, now, actorUserId) => changePin(db, envelope, now, true, actorUserId),
   'visit.record': recordVisit,
   'last_pumped.correct': correctLastPumped,
   'setting.set_avg_job_price': setAvgJobPrice,
@@ -483,12 +483,12 @@ const APPLY = {
 }
 
 /** Apply one validated mutation. The effect, audit, and replay record share one batch. */
-export async function applyMutation(db, input, now = Date.now()) {
+export async function applyMutation(db, input, now = Date.now(), actorUserId = '') {
   const envelope = validateEnvelope(input)
   const stored = await replay(db, envelope.mutationId)
   if (stored) return { ok: true, status: 'replayed', result: stored }
   try {
-    const result = await APPLY[envelope.type](db, envelope, now)
+    const result = await APPLY[envelope.type](db, envelope, now, actorUserId)
     return { ok: true, status: 'applied', result }
   } catch (error) {
     if (error instanceof MutationError) throw error
@@ -525,9 +525,9 @@ async function readBody(request) {
   }
 }
 
-export async function post(request, env, ctx, tenant) {
+export async function post(request, env, ctx, tenant, auth) {
   try {
-    return json(await applyMutation(tenant.db, await readBody(request)))
+    return json(await applyMutation(tenant.db, await readBody(request), Date.now(), auth.user.id))
   } catch (error) {
     if (error instanceof MutationError) return json({ ok: false, error: error.message }, error.status)
     throw error

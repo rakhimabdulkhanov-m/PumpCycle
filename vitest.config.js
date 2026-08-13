@@ -15,6 +15,10 @@ export default defineConfig(async () => {
       projects: [
         // Pure logic: runs under Node, no browser or worker environment.
         {
+          // Vite's SSR transform corrupts localstorage_to_d1.mjs on Node 24.13
+          // before Vitest can import it (direct Node ESM import is valid). Load
+          // that Node-only CLI through Node instead; the test remains enabled.
+          ssr: { external: [/scripts[\\/]localstorage_to_d1\.mjs$/] },
           test: {
             name: 'node',
             include: ['test/lib/**/*.test.js'],

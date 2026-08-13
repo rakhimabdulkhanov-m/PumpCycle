@@ -25,7 +25,7 @@ export function replayOutbox(base, records) {
 }
 
 export const isPermanentMutationFailure = (error) =>
-  Number.isInteger(error?.status) && error.status >= 400 && error.status < 500
+  Number.isInteger(error?.status) && error.status >= 400 && error.status < 500 && error.status !== 401
 
 export function failedRecord(record, error) {
   return {

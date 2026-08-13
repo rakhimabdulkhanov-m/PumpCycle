@@ -33,9 +33,23 @@ async function readBootstrap(fetchImpl) {
   return body
 }
 
+async function readJson(fetchImpl, path, init) {
+  const response = await fetchImpl(path, init)
+  let body
+  try { body = await response.json() } catch { body = null }
+  if (!response.ok || body?.ok === false) {
+    const error = new StoreUnavailableError(body?.error || `Request failed (${response.status})`, response.status === 401 ? 'auth-required' : 'request-failed')
+    error.status = response.status
+    throw error
+  }
+  return body
+}
+
 export function createStore(options = {}) {
   const fetchImpl = options.fetch || globalThis.fetch
   const demoLoader = options.demoLoader || (() => import('./demoStore.js'))
+  const apiLoader = options.apiLoader || (() => import('./apiStore.js'))
+  const locationSearch = options.locationSearch ?? globalThis.location?.search ?? ''
   let delegate = null
   let mode = null
   let snapshot = neutral()
@@ -49,6 +63,31 @@ export function createStore(options = {}) {
   const setSnapshot = (next) => {
     snapshot = next
     emit()
+  }
+
+
+  const authGate = (bootstrap, code = 'auth-required', message = 'Sign in to open this customer book.') => {
+    setSnapshot(neutral({
+      mode: 'live', company: bootstrap.company || '', timezone: bootstrap.timezone || '',
+      storeStatus: code, storeError: { message, code }, setupToken: code === 'setup-required' ? new URLSearchParams(locationSearch).get('t') : null,
+    }))
+  }
+
+  async function startApi(bootstrap) {
+    if (!delegate) {
+      const module = await apiLoader()
+      delegate = module.createApiStore({
+        ...options.apiOptions,
+        fetch: fetchImpl,
+        company: bootstrap.company || '',
+        timezone: bootstrap.timezone || '',
+      })
+      await delegate.init()
+      unsubscribeDelegate = delegate.subscribe(emit)
+    } else await delegate.resumeAfterAuth()
+    snapshot = delegate.getSnapshot()
+    emit()
+    return snapshot
   }
 
   async function init() {
@@ -68,20 +107,15 @@ export function createStore(options = {}) {
           return snapshot
         }
 
-        // Step 1A deliberately has no public live data routes. Do not probe
-        // unregistered endpoints or render sample customers on a client host.
-        const blocked = new StoreUnavailableError(
-          'This client book is waiting for sign-in and data-route setup.',
-          'live-auth-required'
-        )
-        setSnapshot(neutral({
-          mode: 'live',
-          company: bootstrap.company || '',
-          timezone: bootstrap.timezone || '',
-          storeStatus: 'auth-required',
-          storeError: { message: blocked.message, code: blocked.code },
-        }))
-        return snapshot
+        try {
+          await readJson(fetchImpl, '/api/auth/session')
+          return startApi(bootstrap)
+        } catch (error) {
+          if (error.status !== 401) throw error
+          const token = new URLSearchParams(locationSearch).get('t')
+          authGate(bootstrap, token ? 'setup-required' : 'auth-required')
+          return snapshot
+        }
       } catch (error) {
         mode = null
         setSnapshot(neutral({
@@ -110,6 +144,34 @@ export function createStore(options = {}) {
     getMode: () => delegate ? delegate.getMode() : mode,
     init,
     retry: init,
+    async login(email, password) {
+      const bootstrap = { company: snapshot.company, timezone: snapshot.timezone }
+      await readJson(fetchImpl, '/api/auth/login', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email, password }),
+      })
+      return startApi(bootstrap)
+    },
+    async setup(password) {
+      const token = snapshot.setupToken
+      const bootstrap = { company: snapshot.company, timezone: snapshot.timezone }
+      await readJson(fetchImpl, '/api/auth/setup', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token, password }),
+      })
+      if (globalThis.history?.replaceState && globalThis.location) {
+        globalThis.history.replaceState(null, '', globalThis.location.pathname)
+      }
+      return startApi(bootstrap)
+    },
+    async logout() {
+      await readJson(fetchImpl, '/api/auth/logout', { method: 'POST' })
+      const company = delegate?.getSnapshot().company || snapshot.company || ''
+      const timezone = delegate?.getSnapshot().timezone || snapshot.timezone || ''
+      unsubscribeDelegate?.()
+      unsubscribeDelegate = null
+      delegate?.destroy?.()
+      delegate = null
+      authGate({ company, timezone })
+    },
     destroy() {
       unsubscribeDelegate?.()
       unsubscribeDelegate = null

@@ -62,6 +62,70 @@ function StoreGate({ snapshot, mode }) {
   )
 }
 
+function AuthGate({ snapshot }) {
+  const setup = snapshot.storeStatus === 'setup-required'
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const submit = async (event) => {
+    event.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      if (setup) await store.setup(password)
+      else await store.login(email, password)
+    } catch (caught) {
+      setError(caught?.message || (setup ? 'Could not set your password.' : 'Could not sign in.'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="flex min-h-dvh flex-col bg-gray-50 text-gray-900">
+      <Topbar demo={false} />
+      <main className="flex flex-1 items-center justify-center px-4 py-8 sm:px-6">
+        <form onSubmit={submit} className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-6 shadow-sm sm:p-8">
+          <p className="text-base font-semibold text-blue-800">{snapshot.company || 'PumpCycle'}</p>
+          <h1 className="mt-1 text-3xl font-bold">{setup ? 'Set your password' : 'Sign in'}</h1>
+          <p className="mt-2 text-base leading-6 text-gray-600">
+            {setup ? 'Choose a password with at least 12 characters. A long phrase is fine.' : 'Use the owner email and password for this company.'}
+          </p>
+          {!setup && (
+            <label className="mt-6 block text-base font-semibold">
+              Email
+              <input
+                type="email" name="email" autoComplete="username" required maxLength={320}
+                value={email} onChange={(event) => setEmail(event.target.value)}
+                className="mt-2 w-full rounded-lg border border-gray-400 px-4 py-3 text-lg outline-none focus:border-blue-700 focus:ring-2 focus:ring-blue-200"
+              />
+            </label>
+          )}
+          <label className="mt-5 block text-base font-semibold">
+            {setup ? 'New password' : 'Password'}
+            <input
+              type="password" name="password" autoComplete={setup ? 'new-password' : 'current-password'}
+              required minLength={setup ? 12 : undefined} maxLength={1024}
+              value={password} onChange={(event) => setPassword(event.target.value)}
+              className="mt-2 w-full rounded-lg border border-gray-400 px-4 py-3 text-lg outline-none focus:border-blue-700 focus:ring-2 focus:ring-blue-200"
+            />
+          </label>
+          {error && <p role="alert" className="mt-4 rounded-lg bg-red-50 p-3 text-base font-semibold text-red-800">{error}</p>}
+          <button
+            type="submit" disabled={busy}
+            className="mt-6 w-full rounded-lg bg-blue-700 px-5 py-3 text-lg font-bold text-white hover:bg-blue-800 disabled:cursor-wait disabled:opacity-60"
+          >
+            {busy ? 'Please wait…' : setup ? 'Set password and continue' : 'Sign in'}
+          </button>
+        </form>
+      </main>
+    </div>
+  )
+}
+
 function SyncNotice({ snapshot }) {
   if (snapshot.failedMutation) {
     return (
@@ -176,13 +240,21 @@ function App() {
   const setAvgJobPrice = useCallback((price) => store.setAvgJobPrice(price), [])
   const markReminderSent = useCallback((reminderId) => store.markReminderSent(reminderId), [])
 
+  if (mode === 'live' && ['auth-required', 'setup-required'].includes(data.storeStatus)) {
+    return <AuthGate snapshot={data} />
+  }
+
   if (data.blocked || !mode) {
     return <StoreGate snapshot={data} mode={mode} />
   }
 
   return (
     <div className="flex h-dvh flex-col bg-gray-50 text-gray-900">
-      <Topbar demo={mode === 'demo'} onGetThis={() => setModalOpen(true)} />
+      <Topbar
+        demo={mode === 'demo'}
+        onGetThis={() => setModalOpen(true)}
+        onSignOut={mode === 'live' ? () => void store.logout().catch(() => {}) : undefined}
+      />
       <SyncNotice snapshot={data} />
       <TabNav active={tab} onChange={setTab} />
       <main className="min-h-0 flex-1 overflow-auto">

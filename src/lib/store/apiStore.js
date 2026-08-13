@@ -68,6 +68,7 @@ export function createApiStore(options = {}) {
   const customerIdFactory = options.customerIdFactory || newCustomerId
   const autoSync = options.autoSync !== false
   const onlineTarget = options.onlineTarget ?? globalThis
+  const onAuthRequired = options.onAuthRequired || (() => {})
   let base = emptySnapshot()
   let outbox = []
   let snapshot = { ...base, mode: 'live', storeStatus: 'booting', pendingCount: 0 }
@@ -85,6 +86,9 @@ export function createApiStore(options = {}) {
       ...replayOutbox(base, outbox),
       mode: 'live',
       storeStatus: status,
+      blocked: status === 'auth-required',
+      company: options.company || '',
+      timezone: options.timezone || '',
       pendingCount: outbox.length,
       failedMutation: outbox.find((row) => row.status === 'failed') || null,
       storeError: error ? { message: error.message || String(error), status: error.status || 0 } : null,
@@ -108,7 +112,10 @@ export function createApiStore(options = {}) {
         publish('ready')
         return true
       } catch (error) {
-        publish('offline', error)
+        if (error?.status === 401) {
+          publish('auth-required', error)
+          onAuthRequired(error)
+        } else publish('offline', error)
         return false
       } finally {
         refreshPromise = null
@@ -131,7 +138,10 @@ export function createApiStore(options = {}) {
           try {
             await client.mutate(encodeMutation(head))
           } catch (error) {
-            if (isPermanentMutationFailure(error)) {
+            if (error?.status === 401) {
+              publish('auth-required', error)
+              onAuthRequired(error)
+            } else if (isPermanentMutationFailure(error)) {
               const failed = failedRecord(head, error)
               await storage.markFailed(failed)
               outbox = [failed, ...outbox.slice(1)]
@@ -205,6 +215,16 @@ export function createApiStore(options = {}) {
     init,
     refresh,
     flush,
+    async resumeAfterAuth() {
+      publish('ready')
+      // auth-required is published inside pull/flush catches, immediately
+      // before their finally blocks clear the single-flight promises. A fast
+      // sign-in can arrive in that small window. Wait for the dying flight,
+      // then start a genuinely new replay instead of returning the old 401.
+      const settling = [flushPromise, refreshPromise].filter(Boolean)
+      if (settling.length) await Promise.allSettled(settling)
+      return refresh()
+    },
     destroy() {
       onlineTarget?.removeEventListener?.('online', reconnect)
     },

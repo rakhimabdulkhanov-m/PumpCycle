@@ -2,6 +2,10 @@ import { json } from './lib/json.js'
 import * as lead from './api/lead.js'
 import * as geocode from './api/geocode.js'
 import * as bootstrap from './api/bootstrap.js'
+import * as authApi from './api/auth.js'
+import * as sync from './api/sync.js'
+import * as mutations from './api/mutations.js'
+import { authenticateSession, originMatches } from './lib/auth.js'
 
 /**
  * Explicit route table. Matching is on method AND path.
@@ -33,6 +37,12 @@ const ROUTES = [
     path: '/api/bootstrap',
     methods: { GET: bootstrap.get },
   },
+  { path: '/api/auth/login', liveOnly: true, unsafe: true, methods: { POST: authApi.login } },
+  { path: '/api/auth/setup', liveOnly: true, unsafe: true, methods: { POST: authApi.setup } },
+  { path: '/api/auth/session', liveOnly: true, protected: true, methods: { GET: authApi.session } },
+  { path: '/api/auth/logout', liveOnly: true, protected: true, unsafe: true, methods: { POST: authApi.logout } },
+  { path: '/api/sync', liveOnly: true, protected: true, methods: { GET: sync.get } },
+  { path: '/api/mutations', liveOnly: true, protected: true, unsafe: true, methods: { POST: mutations.post } },
 ]
 
 export function isApiPath(pathname) {
@@ -55,6 +65,10 @@ export async function handleApi(request, env, ctx, url, tenant) {
     return json({ ok: false, error: 'not found' }, 404)
   }
 
+  if (route.liveOnly && tenant.kind !== 'live') {
+    return json({ ok: false, error: 'not found' }, 404)
+  }
+
   const handler = route.methods[request.method]
   if (!handler) {
     return json({ ok: false, error: 'method not allowed' }, 405, {
@@ -62,5 +76,18 @@ export async function handleApi(request, env, ctx, url, tenant) {
     })
   }
 
-  return handler(request, env, ctx, tenant)
+
+  if (route.unsafe && tenant.kind === 'live' && !originMatches(request)) {
+    return json({ ok: false, error: 'forbidden' }, 403)
+  }
+
+  let auth = null
+  if (route.protected) {
+    auth = await authenticateSession(tenant.db, request)
+    if (!auth) return json({ ok: false, error: 'authentication required' }, 401)
+  }
+
+  const response = await handler(request, env, ctx, tenant, auth)
+  if (auth?.cookie) response.headers.set('set-cookie', auth.cookie)
+  return response
 }

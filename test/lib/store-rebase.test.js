@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createApiStore } from '../../src/lib/store/apiStore.js'
 import { createStore } from '../../src/lib/store/index.js'
-import { mergeSyncDelta } from '../../src/lib/wire.js'
+import { encodeMutation, mergeSyncDelta } from '../../src/lib/wire.js'
 
 const base = (name = 'Server') => ({
   customers: [{ id: 'a', name, address: '', phone: '', email: '', tankSizeGal: 1000, lastPumped: '2025-01-01', cycleMonths: 36, notes: '' }],
@@ -187,6 +187,18 @@ describe('api store rebase/outbox', () => {
 })
 
 describe('wire/bootstrap boundaries', () => {
+  it('never sends IndexedDB outbox metadata in the exact mutation envelope', () => {
+    expect(encodeMutation({
+      ...update('persisted-row', 'Safe'),
+      error: { status: 401, message: 'old local state' },
+    })).toEqual({
+      mutationId: 'persisted-row',
+      type: 'customer.update',
+      createdAt: 1,
+      payload: { customerId: 'a', changes: { name: 'Safe' } },
+    })
+  })
+
   it('removes archived rows by id and converts avg price cents to dollars', () => {
     const merged = mergeSyncDelta(base(), {
       ok: true, cursor: 2, customers: [{ id: 'a', archived_at: 99 }], visits: [], photos: [],
@@ -215,11 +227,88 @@ describe('wire/bootstrap boundaries', () => {
   it('live bootstrap remains neutral and never imports demo data', async () => {
     const loader = vi.fn()
     const store = createStore({
-      fetch: async () => ({ ok: true, status: 200, json: async () => ({ ok: true, mode: 'live', company: 'Client' }) }),
+      fetch: async (path) => path === '/api/bootstrap'
+        ? { ok: true, status: 200, json: async () => ({ ok: true, mode: 'live', company: 'Client' }) }
+        : { ok: false, status: 401, json: async () => ({ ok: false, error: 'authentication required' }) },
       demoLoader: loader,
     })
     await store.init()
     expect(loader).not.toHaveBeenCalled()
     expect(store.getSnapshot()).toMatchObject({ mode: 'live', blocked: true, storeStatus: 'auth-required', customers: [] })
+  })
+
+  it('live unauthenticated and setup URLs select the correct gates', async () => {
+    const fetch = vi.fn(async (path) => path === '/api/bootstrap'
+      ? { ok: true, status: 200, json: async () => ({ ok: true, mode: 'live', company: 'Client' }) }
+      : { ok: false, status: 401, json: async () => ({ ok: false, error: 'authentication required' }) })
+    const signIn = createStore({ fetch, locationSearch: '' })
+    await signIn.init()
+    expect(signIn.getSnapshot()).toMatchObject({ storeStatus: 'auth-required', setupToken: null })
+
+    const setup = createStore({ fetch, locationSearch: '?t=' + 'a'.repeat(64) })
+    await setup.init()
+    expect(setup.getSnapshot()).toMatchObject({ storeStatus: 'setup-required', setupToken: 'a'.repeat(64) })
+  })
+
+  it('authenticated live bootstrap creates the API store and starts it', async () => {
+    const api = { init: vi.fn(), subscribe: () => () => {}, getSnapshot: () => ({ mode: 'live', storeStatus: 'ready', customers: ['live'] }), getMode: () => 'live' }
+    const apiLoader = vi.fn(async () => ({ createApiStore: () => api }))
+    const store = createStore({
+      fetch: async (path) => ({ ok: true, status: 200, json: async () => path === '/api/bootstrap' ? { ok: true, mode: 'live' } : { ok: true, authenticated: true } }),
+      apiLoader,
+    })
+    await store.init()
+    expect(apiLoader).toHaveBeenCalledTimes(1)
+    expect(api.init).toHaveBeenCalledTimes(1)
+    expect(store.getSnapshot().customers).toEqual(['live'])
+  })
+
+  it('a mutation 401 retains the outbox and can resume after re-login', async () => {
+    const storage = memoryStorage({ outbox: [update('session-expired', 'Pending')] })
+    let authenticated = false
+    const client = {
+      mutate: vi.fn(async () => {
+        if (!authenticated) throw Object.assign(new Error('authentication required'), { status: 401 })
+        return { ok: true }
+      }),
+      sync: vi.fn(async () => ({ ok: true, cursor: 1, customers: [], visits: [], photos: [], reminderLog: [], settings: {}, sentReminders: [], sentAt: {} })),
+    }
+    const store = createApiStore({ storage, client, autoSync: false })
+    await store.init()
+    await store.flush()
+    expect(store.getSnapshot()).toMatchObject({ storeStatus: 'auth-required', pendingCount: 1, failedMutation: null })
+    expect(storage.read().outbox).toHaveLength(1)
+    authenticated = true
+    await store.resumeAfterAuth()
+    expect(store.getSnapshot()).toMatchObject({ storeStatus: 'ready', pendingCount: 0 })
+    expect(storage.read().outbox).toHaveLength(0)
+  })
+
+  it('replays after auth even when re-login races the old 401 flight cleanup', async () => {
+    const storage = memoryStorage({ outbox: [update('lost-auth-response', 'Persisted')] })
+    let calls = 0
+    let resume
+    let store
+    const client = {
+      mutate: vi.fn(async () => {
+        calls += 1
+        if (calls === 1) throw Object.assign(new Error('authentication required'), { status: 401 })
+        return { ok: true, status: 'replayed' }
+      }),
+      sync: vi.fn(async () => ({ ok: true, cursor: 1, customers: [], visits: [], photos: [], reminderLog: [], settings: {}, sentReminders: [], sentAt: {} })),
+    }
+    store = createApiStore({
+      storage,
+      client,
+      autoSync: false,
+      // This callback runs while flushPromise still points at the first flight.
+      onAuthRequired: () => { resume = store.resumeAfterAuth() },
+    })
+    await store.init()
+    await store.flush()
+    await resume
+    expect(client.mutate).toHaveBeenCalledTimes(2)
+    expect(storage.read().outbox).toHaveLength(0)
+    expect(store.getSnapshot()).toMatchObject({ storeStatus: 'ready', pendingCount: 0 })
   })
 })

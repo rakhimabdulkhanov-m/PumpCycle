@@ -45,6 +45,16 @@
         "limit": 30,
         "period": 60
       }
+    },
+    // Sign-in has a separate namespace so public lead/geocode traffic cannot
+    // consume an owner's login budget. Account lockout remains the second layer.
+    {
+      "name": "LOGIN_RATE_LIMITER",
+      "namespace_id": "9023",
+      "simple": {
+        "limit": 12,
+        "period": 60
+      }
     }
   ],
 

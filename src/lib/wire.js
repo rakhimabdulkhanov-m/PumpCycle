@@ -84,7 +84,15 @@ export function encodeMutation(mutation) {
     }
     delete payload.avgJobPrice
   }
-  return { ...mutation, payload }
+  // IndexedDB adds local replay metadata (`order`, `status`, and possibly
+  // `error`) to an outbox record. The Worker accepts an exact four-field
+  // envelope, so local bookkeeping must never cross the HTTP boundary.
+  return {
+    mutationId: mutation.mutationId,
+    type: mutation.type,
+    createdAt: mutation.createdAt,
+    payload,
+  }
 }
 
 function mergeRows(baseRows, deltaRows) {

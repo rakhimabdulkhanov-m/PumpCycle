@@ -1,4 +1,4 @@
-export default function Topbar({ demo = false, onGetThis }) {
+export default function Topbar({ demo = false, onGetThis, onSignOut }) {
   return (
     <header className="bg-white border-b border-gray-200 px-4 py-3 sm:px-6">
       <div className="flex flex-wrap items-center gap-3">
@@ -15,6 +15,15 @@ export default function Topbar({ demo = false, onGetThis }) {
               Get this for your company
             </button>
           </>
+        )}
+        {!demo && onSignOut && (
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="ml-auto rounded-lg border border-gray-300 bg-white px-4 py-2 text-base font-semibold text-gray-800 hover:bg-gray-50"
+          >
+            Sign out
+          </button>
         )}
       </div>
     </header>
