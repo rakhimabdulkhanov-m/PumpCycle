@@ -432,9 +432,14 @@ async function markManualSent(db, envelope, now, actorUserId) {
   exactKeys(p, ['customerId', 'reminderKey', 'channel'], 'payload', ['customerId', 'reminderKey', 'channel'])
   const customerId = id(p.customerId, 'payload.customerId')
   const current = await customer(db, customerId)
-  if (!['60', '15', '14'].includes(p.reminderKey)) throw new MutationError('payload.reminderKey is invalid')
+  // Canonical rung keys from src/lib/reminders.js, not day offsets. The
+  // automatic sender writes the same keys, so a manual "mark sent" and a cron
+  // send now meet on the uniqueness index instead of silently recording the same
+  // reminder twice - and the Reminders tab, which reads these back through
+  // reminderCompatibility, sees a cron send as sent.
+  if (!['pre', 'sms'].includes(p.reminderKey)) throw new MutationError('payload.reminderKey is invalid')
   if (!['email', 'sms'].includes(p.channel)) throw new MutationError('payload.channel is invalid')
-  if ((p.reminderKey === '14') !== (p.channel === 'sms')) {
+  if ((p.reminderKey === 'sms') !== (p.channel === 'sms')) {
     throw new MutationError('payload reminder key and channel do not match')
   }
   const reminderId = `${envelope.mutationId}:reminder`

@@ -192,12 +192,12 @@ describe('mutation happy paths and semantics', () => {
   it('reminder.mark_manual_sent writes the current cycle and projects a manual sent row', async () => {
     const { id } = await add()
     await applyMutation(db(), envelope('reminder.mark_manual_sent', {
-      customerId: id, reminderKey: '14', channel: 'sms',
+      customerId: id, reminderKey: 'sms', channel: 'sms',
     }), 11000)
     expect(await row(
       'SELECT customer_id, reminder_key, cycle_seq, channel, provider, status, sent_at FROM reminder_log WHERE customer_id = ?', id
     )).toEqual({
-      customer_id: id, reminder_key: '14', cycle_seq: 0, channel: 'sms',
+      customer_id: id, reminder_key: 'sms', cycle_seq: 0, channel: 'sms',
       provider: 'manual', status: 'sent', sent_at: 11000,
     })
   })
@@ -245,7 +245,7 @@ describe('validation and semantic errors', () => {
 
   it('returns 409 when a different mutation id tries to mark the same current-cycle reminder', async () => {
     const { id } = await add()
-    const payload = { customerId: id, reminderKey: '60', channel: 'email' }
+    const payload = { customerId: id, reminderKey: 'pre', channel: 'email' }
     await applyMutation(db(), envelope('reminder.mark_manual_sent', payload))
     await expect(applyMutation(db(), envelope('reminder.mark_manual_sent', payload)))
       .rejects.toMatchObject({ status: 409 })
@@ -315,7 +315,7 @@ describe('transactionality and replay idempotency', () => {
     const { id } = await add()
     const mutationId = uid('reminder-replay')
     const mutation = envelope('reminder.mark_manual_sent', {
-      customerId: id, reminderKey: '14', channel: 'sms',
+      customerId: id, reminderKey: 'sms', channel: 'sms',
     }, mutationId)
     await applyMutation(db(), mutation, 14000)
     const replay = await applyMutation(db(), mutation, 15000)

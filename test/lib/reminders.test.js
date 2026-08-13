@@ -126,19 +126,20 @@ describe('remindersFor - contact filtering', () => {
 // ---------------------------------------------------------------------------
 
 describe('commercial boundary flip', () => {
-  it('cycleMonths=36 -> Email reminder id uses daysBefore=60', () => {
-    const customer = cust({ cycleMonths: 36, lastPumped: '2024-01-01' })
-    const list = remindersFor(customer)
-    const email = list.find((r) => r.channel === 'Email')
-    // id format: `${customerId}:${daysBefore}`
-    expect(email.id).toBe('c1:60')
+  it('keys the Email reminder on the rung, not the lead time', () => {
+    // Both cycle types produce the SAME key. Keying on the day offset meant a
+    // residential customer switched to a commercial cycle changed key from 60
+    // to 15 and was mailed again, and retuning the lead time re-opened every
+    // already-reminded customer. The rung is stable; the distance is not.
+    const residential = remindersFor(cust({ cycleMonths: 36, lastPumped: '2024-01-01' }))
+    const commercial = remindersFor(cust({ cycleMonths: 3, lastPumped: '2026-04-01' }))
+    expect(residential.find((r) => r.channel === 'Email').id).toBe('c1:pre')
+    expect(commercial.find((r) => r.channel === 'Email').id).toBe('c1:pre')
   })
 
-  it('cycleMonths=3 -> Email reminder id uses daysBefore=15', () => {
-    const customer = cust({ cycleMonths: 3, lastPumped: '2026-04-01' })
-    const list = remindersFor(customer)
-    const email = list.find((r) => r.channel === 'Email')
-    expect(email.id).toBe('c1:15')
+  it('keys SMS separately from email', () => {
+    const list = remindersFor(cust({ cycleMonths: 36, lastPumped: '2024-01-01' }))
+    expect(list.find((r) => r.channel === 'SMS').id).toBe('c1:sms')
   })
 
   it('cycleMonths=36 Email lead is 60 days before due; cycleMonths=3 Email lead is 15 days before due', () => {
@@ -190,24 +191,18 @@ describe('DST boundary days', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Known bug: nextDue end-of-month overflow
+// nextDue end-of-month clamping
 //
-// KNOWN BUG: nextDue() uses d.setMonth(d.getMonth() + cycleMonths) which
-// overflows at end of month. On a commercial 90-day (3-month) cycle, a
-// customer last pumped on Nov 30 gets a nextDue of Mar 1 or Mar 2 (JS
-// auto-advances past the non-existent Feb 30), not Feb 28/29.
-// This is scheduled to be fixed. Do NOT fix it here; this test documents
-// current actual behaviour so we know when the bug is corrected.
+// This block used to document the overflow as a known bug and assert the wrong
+// answer deliberately, so the suite would notice when it was fixed. It has been
+// fixed: setMonth alone rolled Nov 30 + 3 months to Mar 2 rather than Feb 28,
+// which shifted the due date printed in the reminder's own subject line and
+// every rung of the overdue ladder by 2-3 days. The assertions below are now
+// the correct behaviour.
 // ---------------------------------------------------------------------------
 
-describe('known bug: end-of-month overflow in nextDue (commercial 90-day cycle)', () => {
-  it('Nov 30 + 3 months overflows Feb and lands in Mar, not on Feb 28 [KNOWN BUG - do not fix]', () => {
-    // 2026 is not a leap year. new Date(2026, 10, 30).setMonth(13):
-    //   month 13 = Jan 2028? No: month 13 from a base of November:
-    //   month 10 (Nov) + 3 = month 13 => month 13 mod 12 = 1 (Feb), year bumps to 2027.
-    //   But day 30 does not exist in Feb 2027, so JS overflows to Mar 2 (Feb has 28 days
-    //   in 2027; 30 - 28 = 2, so Mar 2).
-    // The correct nextDue would be Feb 28, 2027.
+describe('end-of-month clamping in nextDue (commercial 90-day cycle)', () => {
+  it('Nov 30 + 3 months lands on Feb 28, not in March', () => {
     const customer = cust({
       cycleMonths: 3,
       lastPumped: '2026-11-30',
@@ -217,15 +212,8 @@ describe('known bug: end-of-month overflow in nextDue (commercial 90-day cycle)'
     const list = remindersFor(customer)
     const email = list.find((r) => r.channel === 'Email')
 
-    const actualDue = localISO(email.sendDate)
-
-    // The correct answer: nextDue=Feb 28, sendDate=Feb 28-15=Feb 13.
-    // The buggy answer:   nextDue=Mar 2,  sendDate=Mar 2-15=Feb 15.
-    // (Mar 1 is possible if the JS engine lands there instead of Mar 2.)
-    // This test asserts the BUGGY (current) behaviour:
-    expect(actualDue).not.toBe('2027-02-13') // would only be true if the bug were fixed
-    // The send date must be in a small window around the buggy overflow landing.
-    expect(['2027-02-14', '2027-02-15', '2027-02-16']).toContain(actualDue)
+    // nextDue = Feb 28 2027; the commercial email lead is 15 days.
+    expect(localISO(email.sendDate)).toBe('2027-02-13')
   })
 })
 
@@ -254,7 +242,7 @@ describe('remindersForCustomer', () => {
   it('already-sent reminders are excluded from the queue', () => {
     pinToday('2026-01-01')
     const customer = cust({ lastPumped: '2024-01-01', cycleMonths: 36 })
-    const sentIds = ['c1:60'] // the Email reminder id
+    const sentIds = ['c1:pre'] // the Email reminder id
     const list = remindersForCustomer(customer, sentIds)
     // Only SMS should remain
     expect(list).toHaveLength(1)

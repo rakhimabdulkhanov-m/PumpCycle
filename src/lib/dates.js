@@ -86,7 +86,20 @@ export function isCommercial(customer) {
 export function nextDue(customer) {
   const d = parseISO(customer.lastPumped)
   if (!d) return null
+
+  // setMonth alone overflows into the following month when the target month is
+  // shorter than the day of the month: a grease trap pumped 30 November on a
+  // 3-month cycle came out as 2 March rather than 28 February. That date is not
+  // an internal detail - it is printed in the reminder's subject line and drives
+  // every rung of the overdue ladder, so it drifted 2-3 days for any customer
+  // pumped on the 29th to the 31st whose cycle lands in a short month.
+  // Clamping to the last day of the target month is the standard reading of
+  // "three months after the 30th".
+  const day = d.getDate()
+  d.setDate(1)
   d.setMonth(d.getMonth() + customer.cycleMonths)
+  const lastDayOfTargetMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
+  d.setDate(Math.min(day, lastDayOfTargetMonth))
   return d
 }
 

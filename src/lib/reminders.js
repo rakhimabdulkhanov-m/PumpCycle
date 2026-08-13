@@ -98,12 +98,27 @@ export function overdueRemindersFor(customers, today) {
 // before for everyone. Status is driven ONLY by manual sends: an id in sentIds
 // is "Sent" (with its real sent date from sentAt). A past send date does NOT
 // auto-send or auto-expire — picking the still-relevant ones is scheduledReminders().
+// The pre-due rungs, keyed by rung rather than by day offset.
+//
+// These ids are not display strings: they are what reminder_log records, what
+// the automatic sender's uniqueness guard is built on, and what
+// reminderCompatibility turns back into "this one has been sent". All three
+// have to agree, so the key is defined once, here.
+//
+// Keying on the offset instead ('60', '15') was the original scheme and it
+// broke in two directions at once: retuning the 60-day lead time would re-open
+// every already-reminded customer for a duplicate, and a residential customer
+// switched to a commercial cycle would change key from 60 to 15 and be mailed
+// again. The rung is stable; the distance is a product judgement.
+export const PRE_DUE_KEY = 'pre'
+export const SMS_KEY = 'sms'
+
 export function remindersFor(customer, sentIds = [], sentAt = {}) {
   if (!nextDue(customer)) return []
-  const make = (daysBefore, channel) => {
+  const make = (daysBefore, channel, key) => {
     const sendDate = nextDue(customer)
     sendDate.setDate(sendDate.getDate() - daysBefore)
-    const id = `${customer.id}:${daysBefore}`
+    const id = `${customer.id}:${key}`
     const sent = sentIds.includes(id)
     return {
       id,
@@ -119,10 +134,10 @@ export function remindersFor(customer, sentIds = [], sentAt = {}) {
   }
   const list = []
   if (customer.email && customer.email.trim() !== '') {
-    list.push(make(isCommercial(customer) ? 15 : 60, 'Email'))
+    list.push(make(isCommercial(customer) ? 15 : 60, 'Email', PRE_DUE_KEY))
   }
   if (customer.phone && customer.phone.trim() !== '') {
-    list.push(make(14, 'SMS'))
+    list.push(make(14, 'SMS', SMS_KEY))
   }
   return list
 }

@@ -6,7 +6,7 @@ import {
   overdueRemindersFor,
   scheduledReminders,
 } from '../../src/lib/reminders.js'
-import { daysUntilDue, dueStatus, startOfDay } from '../../src/lib/dates.js'
+import { daysUntilDue, dueStatus, nextDue, startOfDay } from '../../src/lib/dates.js'
 
 // Every test pins an explicit `today`. Nothing here may depend on the wall clock.
 
@@ -34,6 +34,34 @@ function grease(over = {}) {
     ...over,
   })
 }
+
+describe('nextDue at month ends', () => {
+  it('clamps into a short month instead of overflowing past it', () => {
+    // setMonth alone rolled 30 November + 3 months to 2 March. That date is
+    // printed in the reminder subject line and drives every overdue rung, so it
+    // drifted by 2-3 days for anyone pumped on the 29th-31st.
+    const cases = [
+      { lastPumped: '2025-11-30', cycleMonths: 3, expect: '2026-02-28' },
+      { lastPumped: '2024-11-30', cycleMonths: 3, expect: '2025-02-28' },
+      { lastPumped: '2023-11-30', cycleMonths: 3, expect: '2024-02-29' }, // leap year
+      { lastPumped: '2026-01-31', cycleMonths: 1, expect: '2026-02-28' },
+      { lastPumped: '2026-03-31', cycleMonths: 1, expect: '2026-04-30' },
+      { lastPumped: '2026-08-31', cycleMonths: 6, expect: '2027-02-28' },
+    ]
+    for (const c of cases) {
+      const due = nextDue({ lastPumped: c.lastPumped, cycleMonths: c.cycleMonths })
+      const iso = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-${String(due.getDate()).padStart(2, '0')}`
+      expect(iso, `${c.lastPumped} + ${c.cycleMonths}mo`).toBe(c.expect)
+    }
+  })
+
+  it('leaves ordinary dates exactly where they were', () => {
+    const due = nextDue({ lastPumped: '2023-01-10', cycleMonths: 36 })
+    expect(due.getFullYear()).toBe(2026)
+    expect(due.getMonth()).toBe(0)
+    expect(due.getDate()).toBe(10)
+  })
+})
 
 describe('the trailing `today` parameter', () => {
   it('leaves every existing caller on the ambient clock', () => {
