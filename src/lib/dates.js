@@ -14,6 +14,52 @@ export function todayISO() {
   return toISO(new Date())
 }
 
+// The calendar date it currently is in a named IANA zone, as YYYY-MM-DD.
+//
+// A Worker's ambient clock is UTC, so at 20:00 Eastern it already believes it
+// is tomorrow. Every send decision has to be made against the tenant's own
+// calendar instead. workerd ships ICU timezone data (guarded by
+// test/worker/icu_probe.test.js), and 'en-CA' formats as YYYY-MM-DD directly.
+// An unknown zone throws RangeError out of Intl rather than quietly becoming
+// UTC, which is the behaviour we want: a misconfigured tenant must fail loudly,
+// not mail at the wrong hour forever.
+export function todayISOInZone(timeZone) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date())
+}
+
+// The hour (0-23) it currently is in a named IANA zone.
+export function hourInZone(timeZone) {
+  const hour = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour: '2-digit',
+    hour12: false,
+  }).format(new Date())
+  // 'en-US' renders midnight as '24' in some ICU versions; normalise to 0.
+  return Number(hour) % 24
+}
+
+// Resolves the optional trailing `today` argument carried by the due-date
+// functions below. Undefined means "use the ambient clock", which is what the
+// browser wants and what every existing caller gets. An explicitly supplied
+// value is always a YYYY-MM-DD string and is parsed strictly: a caller that
+// passes a bad date is the Worker, and silently falling back to a UTC clock
+// there sends mail on the wrong day without anyone noticing.
+export function startOfDay(today) {
+  if (today === undefined || today === null) {
+    const now = new Date()
+    now.setHours(0, 0, 0, 0)
+    return now
+  }
+  const parsed = parseISO(today)
+  if (!parsed) throw new TypeError(`today must be a YYYY-MM-DD string, got ${JSON.stringify(today)}`)
+  return parsed
+}
+
 export function shiftISO(iso, days) {
   const d = parseISO(iso)
   if (!d) return null
@@ -40,17 +86,17 @@ export function nextDue(customer) {
   return d
 }
 
-export function daysUntilDue(customer) {
+// `today` is optional and defaults to the ambient clock. The Worker passes the
+// tenant's local date so a send decision is never made against UTC.
+export function daysUntilDue(customer, today) {
   const due = nextDue(customer)
   if (!due) return Number.NEGATIVE_INFINITY
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  return Math.round((due - today) / 86400000)
+  return Math.round((due - startOfDay(today)) / 86400000)
 }
 
 // 'overdue' | 'due-soon' (within 60 days) | 'ok'
-export function dueStatus(customer) {
-  const days = daysUntilDue(customer)
+export function dueStatus(customer, today) {
+  const days = daysUntilDue(customer, today)
   if (days < 0) return 'overdue'
   if (days <= 60) return 'due-soon'
   return 'ok'
