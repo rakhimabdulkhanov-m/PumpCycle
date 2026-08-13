@@ -5,6 +5,7 @@ import * as bootstrap from './api/bootstrap.js'
 import * as authApi from './api/auth.js'
 import * as sync from './api/sync.js'
 import * as mutations from './api/mutations.js'
+import * as webhooks from './api/webhooks.js'
 import { authenticateSession, originMatches } from './lib/auth.js'
 
 /**
@@ -43,6 +44,13 @@ const ROUTES = [
   { path: '/api/auth/logout', liveOnly: true, protected: true, unsafe: true, methods: { POST: authApi.logout } },
   { path: '/api/sync', liveOnly: true, protected: true, methods: { GET: sync.get } },
   { path: '/api/mutations', liveOnly: true, protected: true, unsafe: true, methods: { POST: mutations.post } },
+  // Resend delivery events. Deliberately NOT `protected` and NOT `unsafe`:
+  // Resend holds no session cookie and sends no Origin header, so both checks
+  // would reject every legitimate delivery. Its authentication is the Svix HMAC
+  // signature over the raw body, verified inside the handler before anything is
+  // read from the payload. liveOnly because the demo host has no client data and
+  // no Resend project pointing at it.
+  { path: '/api/webhooks/resend', liveOnly: true, methods: { POST: webhooks.post } },
 ]
 
 export function isApiPath(pathname) {
