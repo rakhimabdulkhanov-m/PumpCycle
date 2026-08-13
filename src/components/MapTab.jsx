@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MapContainer, TileLayer, Marker, LayersControl, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { dueStatus, todayISO } from '../lib/dates.js'
-import { hasLocation } from '../lib/storage.js'
+import { hasLocation } from '../lib/point.js'
 import {
   customersNeedingPin,
   manualLocationPatch,
@@ -14,15 +14,15 @@ import {
   placementView,
   PLACEMENT_MOVE_METERS,
 } from '../lib/location.js'
+import {
+  clusterGrid,
+  MAP_STATUS_COLORS,
+  pointsInPaddedBounds,
+  visibleScalePoints,
+} from '../lib/mapScale.js'
 import CustomerCard from './CustomerCard.jsx'
 import NewLidPanel from './NewLidPanel.jsx'
 import PinPlacer from './PinPlacer.jsx'
-
-const STATUS_COLORS = {
-  overdue: '#dc2626',
-  'due-soon': '#f59e0b',
-  ok: '#16a34a',
-}
 
 /**
  * hollow = this pin is not settled yet (see pinConfirmCase): a town or road
@@ -30,32 +30,38 @@ const STATUS_COLORS = {
  * still reads at a glance; outline instead of a solid body, so "we are not sure
  * this is the yard" is visible on the map and not only in a list.
  */
-function makeIcon(color, { hollow = false } = {}) {
+function makeIcon(color, { hollow = false, status = 'draft', demoted = false } = {}) {
   const svg = `
     <svg width="30" height="42" viewBox="0 0 30 42" xmlns="http://www.w3.org/2000/svg">
       <path d="M15 1 C7.3 1 1 7.4 1 15.3 C1 25.5 15 41 15 41 C15 41 29 25.5 29 15.3 C29 7.4 22.7 1 15 1 Z"
         fill="${hollow ? 'white' : color}" stroke="${hollow ? color : 'white'}" stroke-width="${hollow ? 3 : 2}"
+        opacity="${demoted ? 0.58 : 1}"
         ${hollow ? 'stroke-dasharray="5 3"' : ''}/>
       <circle cx="15" cy="15" r="5" fill="${hollow ? color : 'white'}"/>
     </svg>`
   return L.divIcon({
-    html: svg,
-    className: hollow ? 'pin-unconfirmed' : '',
-    iconSize: [30, 42],
-    iconAnchor: [15, 42],
+    html: `<span style="display:flex;width:44px;height:44px;justify-content:center;align-items:flex-start">${svg}</span>`,
+    className:
+      `map-customer-marker map-customer-marker--${status} ` +
+      (hollow ? 'pin-unconfirmed' : ''),
+    iconSize: [44, 44],
+    iconAnchor: [22, 42],
   })
 }
 
 const ICONS = {
-  overdue: makeIcon(STATUS_COLORS.overdue),
-  'due-soon': makeIcon(STATUS_COLORS['due-soon']),
-  ok: makeIcon(STATUS_COLORS.ok),
+  overdue: makeIcon(MAP_STATUS_COLORS.overdue, { status: 'overdue' }),
+  'due-soon': makeIcon(MAP_STATUS_COLORS['due-soon'], { status: 'due-soon' }),
+  ok: makeIcon(MAP_STATUS_COLORS.ok, { status: 'ok', demoted: true }),
 }
 
 const UNCONFIRMED_ICONS = {
-  overdue: makeIcon(STATUS_COLORS.overdue, { hollow: true }),
-  'due-soon': makeIcon(STATUS_COLORS['due-soon'], { hollow: true }),
-  ok: makeIcon(STATUS_COLORS.ok, { hollow: true }),
+  overdue: makeIcon(MAP_STATUS_COLORS.overdue, { hollow: true, status: 'overdue' }),
+  'due-soon': makeIcon(MAP_STATUS_COLORS['due-soon'], {
+    hollow: true,
+    status: 'due-soon',
+  }),
+  ok: makeIcon(MAP_STATUS_COLORS.ok, { hollow: true, status: 'ok', demoted: true }),
 }
 
 // What the "Needs a pin" list says about each row. Which problem it is decides
@@ -74,7 +80,10 @@ const PIN_CASE_LABEL = {
 // Blue draft pin — visually distinct from the red/yellow/green customer pins,
 // and the only thing it marks is a spot already aimed at with the crosshair
 // while the new customer's name is being typed.
-const DRAFT_ICON = makeIcon('#2563eb')
+const DRAFT_ICON = L.divIcon({
+  ...makeIcon('#2563eb').options,
+  className: 'map-draft-marker',
+})
 
 // Anything past this is a different part of the country, not the next street:
 // flying it takes 8-10 s of swooping, so jump there instead.
@@ -84,30 +93,32 @@ const FLY_MAX_METERS = 50000
 // truck; short enough that it is gone before the next thing he does.
 const UNDO_MS = 10000
 
-// Fly to a location saved from Add Customer (Due tab). Lives INSIDE
-// MapContainer on purpose: children only render once the map exists, so useMap()
-// always returns a real instance. A parent effect would miss the common case
-// where the map mounts with a target already waiting (MapContainer's forwarded
-// ref is still null on the first commit). The effect runs once per target
-// object: App hands back a stable onConsumed, so a re-render can't re-fly.
-function FlyToTarget({ target, onConsumed }) {
+// App owns the intent, so tab switches cannot lose it. Map consumes a `show`
+// only after arriving and opening the exact card; `place` only after the exact
+// placement session has begun. The live customer is resolved again here, so a
+// coordinate removed during the transition is never reused from stale state.
+function NavigationTarget({ intent, customer, onShow, onPlace }) {
   const map = useMap()
   useEffect(() => {
-    if (!target) return
-    const to = [target.lat, target.lng]
-    // The target is consumed on arrival, not at take-off. Flipping to the Due
-    // list during the ~3 s animation unmounts the map mid-flight; holding the
-    // target means the next mount flies to the same yard instead of stranding
-    // the seller at the view he started from with nothing left to re-fly.
-    // Only an arrival counts - an invalidateSize can also fire moveend.
+    if (!intent || !customer) return
+    if (intent.kind === 'place') {
+      onPlace(intent)
+      return
+    }
+    if (!hasLocation(customer)) {
+      map.stop()
+      onShow(intent)
+      return
+    }
+    const to = [customer.lat, customer.lng]
     const settled = () => {
-      if (map.getCenter().distanceTo(to) < 1) onConsumed()
+      if (map.getCenter().distanceTo(to) < 1) onShow(intent)
     }
     map.on('moveend', settled)
-    if (map.distance(map.getCenter(), to) > FLY_MAX_METERS) map.setView(to, target.zoom)
-    else map.flyTo(to, target.zoom)
+    if (map.distance(map.getCenter(), to) > FLY_MAX_METERS) map.setView(to, 19)
+    else map.flyTo(to, 19)
     return () => map.off('moveend', settled)
-  }, [target, map, onConsumed])
+  }, [intent, customer, customer?.lat, customer?.lng, map, onShow, onPlace])
   return null
 }
 
@@ -164,6 +175,191 @@ function PlacementMap({ active, origin, onMoved, onZoom }) {
   return null
 }
 
+function makeScaleRenderer() {
+  const CountCanvas = L.Canvas.extend({
+    _updateCircle(layer) {
+      L.Canvas.prototype._updateCircle.call(this, layer)
+      if (!this._drawing || layer._empty() || layer.options.clusterCount === undefined) return
+      const label = String(layer.options.clusterCount)
+      const context = this._ctx
+      context.save()
+      context.fillStyle = 'white'
+      context.font = `700 ${label.length > 3 ? 11 : 14}px system-ui, sans-serif`
+      context.textAlign = 'center'
+      context.textBaseline = 'middle'
+      context.fillText(label, layer._point.x, layer._point.y + 0.5)
+      context.restore()
+    },
+  })
+  return new CountCanvas({ padding: 0.5, tolerance: 16 })
+}
+
+function mapBoundsSnapshot(map) {
+  const bounds = map.getBounds()
+  return {
+    south: bounds.getSouth(),
+    west: bounds.getWest(),
+    north: bounds.getNorth(),
+    east: bounds.getEast(),
+  }
+}
+
+function zoomIntoCluster(map, cluster) {
+  const bounds = L.latLngBounds(
+    [cluster.bounds.south, cluster.bounds.west],
+    [cluster.bounds.north, cluster.bounds.east]
+  )
+  let nextZoom = 13
+  if (cluster.count > 1) {
+    const boundsZoom = map.getBoundsZoom(bounds.pad(0.2), false, L.point(48, 48))
+    if (Number.isFinite(boundsZoom)) {
+      nextZoom = Math.min(13, Math.max(map.getZoom() + 1, boundsZoom))
+    }
+  }
+  map.setView(bounds.getCenter(), nextZoom)
+}
+
+/**
+ * One imperative owner for every customer visual. React does not reconcile a
+ * thousand children on map movement: Leaflet moves one canvas at low/mid zoom,
+ * and only the padded local high-zoom subset becomes exact DOM teardrops.
+ */
+function ScaleMarkers({ points, statusVisibility, directCustomerId, placing, onSelect }) {
+  const map = useMap()
+  const latest = useRef({ points, statusVisibility, directCustomerId, placing, onSelect })
+  const refresh = useRef(null)
+
+  useEffect(() => {
+    const renderer = makeScaleRenderer().addTo(map)
+    const canvasLayers = L.layerGroup().addTo(map)
+    const domLayers = L.layerGroup().addTo(map)
+    const container = map.getContainer()
+    let frame = null
+
+    const render = () => {
+      frame = null
+      canvasLayers.clearLayers()
+      domLayers.clearLayers()
+
+      const current = latest.current
+      const zoom = map.getZoom()
+      const visible = visibleScalePoints(
+        current.points,
+        current.statusVisibility,
+        current.directCustomerId
+      )
+      let visualCount
+      let pointCount = visible.length
+      let mode = 'clusters'
+
+      if (zoom <= 12) {
+        const clusters = clusterGrid(
+          visible,
+          (point) => map.project([point.lat, point.lng], zoom),
+          72
+        )
+        visualCount = clusters.length
+        for (const cluster of clusters) {
+          const latLng = map.unproject(cluster.point, zoom)
+          const radius = Math.min(30, 22 + Math.log10(Math.max(1, cluster.count)) * 4)
+          const circle = L.circleMarker(latLng, {
+            renderer,
+            radius,
+            color: 'white',
+            weight: 2,
+            fillColor: cluster.color,
+            fillOpacity: cluster.status === 'ok' ? 0.65 : 0.92,
+            interactive: !current.placing,
+            clusterCount: cluster.count,
+          })
+          if (!current.placing) circle.on('click', () => zoomIntoCluster(map, cluster))
+          canvasLayers.addLayer(circle)
+        }
+      } else if (zoom <= 16) {
+        mode = 'points'
+        visualCount = visible.length
+        const drawOrder = { ok: 0, 'due-soon': 1, overdue: 2 }
+        const ordered = [...visible].sort((a, b) => drawOrder[a.status] - drawOrder[b.status])
+        for (const point of ordered) {
+          const unsettled = point.unconfirmed
+          const circle = L.circleMarker([point.lat, point.lng], {
+            renderer,
+            radius: 6,
+            color: unsettled ? MAP_STATUS_COLORS[point.status] : 'white',
+            weight: unsettled ? 3 : 2,
+            dashArray: unsettled ? '4 3' : undefined,
+            fillColor: unsettled ? 'white' : MAP_STATUS_COLORS[point.status],
+            fillOpacity: point.status === 'ok' ? 0.42 : 0.9,
+            opacity: point.status === 'ok' ? 0.68 : 1,
+            interactive: !current.placing,
+          })
+          if (!current.placing) circle.on('click', () => current.onSelect(point.id))
+          canvasLayers.addLayer(circle)
+        }
+      } else {
+        mode = 'pins'
+        const local = pointsInPaddedBounds(
+          visible,
+          mapBoundsSnapshot(map),
+          0.25,
+          current.directCustomerId
+        )
+        pointCount = local.length
+        visualCount = local.length
+        for (const point of local) {
+          const marker = L.marker([point.lat, point.lng], {
+            icon: point.unconfirmed ? UNCONFIRMED_ICONS[point.status] : ICONS[point.status],
+            interactive: !current.placing,
+            keyboard: !current.placing,
+            title: point.name,
+          })
+          if (!current.placing) marker.on('click', () => current.onSelect(point.id))
+          marker.on('add', () => {
+            const element = marker.getElement()
+            if (element) element.dataset.customerId = String(point.id)
+          })
+          domLayers.addLayer(marker)
+        }
+      }
+
+      container.dataset.mapScaleMode = mode
+      container.dataset.mapScaleEligibleCount = String(visible.length)
+      container.dataset.mapScaleRenderedPointCount = String(pointCount)
+      container.dataset.mapScaleVisualCount = String(visualCount)
+      container.dataset.mapScaleDomMarkerCount = String(domLayers.getLayers().length)
+    }
+
+    const schedule = () => {
+      if (frame !== null) cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(render)
+    }
+    refresh.current = schedule
+    map.on('moveend zoomend', schedule)
+    render()
+
+    return () => {
+      refresh.current = null
+      map.off('moveend zoomend', schedule)
+      if (frame !== null) cancelAnimationFrame(frame)
+      canvasLayers.remove()
+      domLayers.remove()
+      renderer.remove()
+      delete container.dataset.mapScaleMode
+      delete container.dataset.mapScaleEligibleCount
+      delete container.dataset.mapScaleRenderedPointCount
+      delete container.dataset.mapScaleVisualCount
+      delete container.dataset.mapScaleDomMarkerCount
+    }
+  }, [map])
+
+  useEffect(() => {
+    latest.current = { points, statusVisibility, directCustomerId, placing, onSelect }
+    refresh.current?.()
+  }, [points, statusVisibility, directCustomerId, placing, onSelect])
+
+  return null
+}
+
 // The undo line is deliberately part of the toast rather than a promise the app
 // keeps somewhere else. The write is already saved; the undo is a courtesy that
 // lives as long as this box does, and anything that dismisses the box - the ten
@@ -171,10 +367,10 @@ function PlacementMap({ active, origin, onMoved, onZoom }) {
 // and more honest than carrying a pending undo across tabs, which would mean an
 // operator on the Due list holding an invisible ten-second window over a
 // customer he can no longer see.
-function Toast({ message, actionLabel, onAction }) {
+function Toast({ message, actionLabel, onAction, busy }) {
   return (
-    <div className="fixed bottom-6 left-1/2 z-[1300] flex -translate-x-1/2 items-center gap-4 rounded-lg bg-gray-900 px-5 py-3 text-lg font-medium text-white shadow-xl">
-      <span>
+    <div className="fixed right-3 bottom-[calc(env(safe-area-inset-bottom)+0.75rem)] left-3 z-[1300] flex items-center gap-3 rounded-lg bg-gray-900 px-3 py-3 text-lg font-medium text-white shadow-xl sm:right-auto sm:left-1/2 sm:max-w-[min(36rem,calc(100vw-3rem))] sm:-translate-x-1/2 sm:px-5">
+      <span className="min-w-0 flex-1 leading-snug [overflow-wrap:anywhere]">
         {message}
         {onAction && (
           <span className="block text-sm font-normal text-gray-300">
@@ -186,9 +382,10 @@ function Toast({ message, actionLabel, onAction }) {
         <button
           type="button"
           onClick={onAction}
-          className="min-h-[3.25rem] rounded-lg bg-white px-5 py-2 text-xl font-bold text-gray-900"
+          disabled={busy}
+          className="min-h-[3.25rem] shrink-0 rounded-lg bg-white px-5 py-2 text-xl font-bold text-gray-900 disabled:opacity-60"
         >
-          {actionLabel}
+          {busy ? 'Undoing...' : actionLabel}
         </button>
       )}
     </div>
@@ -208,7 +405,14 @@ function Toast({ message, actionLabel, onAction }) {
 //
 // It is a button: a count he cannot act on is just a complaint, and the Add
 // Customer modal promises him he can drop the pin later.
-function Legend({ located, needsPinCount, onShowNeedsPin, hiddenOnMobile }) {
+function Legend({
+  located,
+  statusVisibility,
+  onToggleStatus,
+  needsPinCount,
+  onShowNeedsPin,
+  hiddenOnMobile,
+}) {
   const counts = { overdue: 0, 'due-soon': 0, ok: 0 }
   located.forEach((c) => counts[dueStatus(c)]++)
   const rows = [
@@ -223,17 +427,30 @@ function Legend({ located, needsPinCount, onShowNeedsPin, hiddenOnMobile }) {
         (hiddenOnMobile ? 'hidden sm:block' : '')
       }
     >
-      {rows.map(([status, label]) => (
-        <div key={status} className="flex items-center gap-2 py-0.5">
-          <span
-            className="inline-block h-4 w-4 rounded-full border-2 border-white shadow"
-            style={{ backgroundColor: STATUS_COLORS[status] }}
-          />
-          <span className="text-base font-semibold text-gray-900">
-            {label} ({counts[status]})
-          </span>
-        </div>
-      ))}
+      {rows.map(([status, label]) => {
+        const active = statusVisibility[status]
+        return (
+          <button
+            key={status}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onToggleStatus(status)}
+            className={
+              'flex min-h-11 w-full items-center gap-2 rounded px-1 text-left transition-opacity ' +
+              (status === 'ok' ? 'opacity-65 ' : '') +
+              (!active ? 'line-through opacity-35' : '')
+            }
+          >
+            <span
+              className="inline-block h-4 w-4 rounded-full border-2 border-white shadow"
+              style={{ backgroundColor: active ? MAP_STATUS_COLORS[status] : '#9ca3af' }}
+            />
+            <span className="text-base font-semibold text-gray-900">
+              {label} ({counts[status]})
+            </span>
+          </button>
+        )
+      })}
       {needsPinCount > 0 && (
         <button
           type="button"
@@ -301,9 +518,14 @@ function NeedsPinList({ customers, onPick, onClose, hiddenOnMobile }) {
 export default function MapTab({
   customers,
   onUpdateCustomer,
+  onMarkPumped,
+  onSetPin,
+  onRestorePin,
   onAddCustomer,
-  flyTarget,
-  onFlyConsumed,
+  navigationIntent,
+  onNavigationConsumed,
+  statusVisibility,
+  onStatusVisibilityChange,
   initialView,
   onLeaveView,
 }) {
@@ -333,16 +555,33 @@ export default function MapTab({
   // closure over the state at save time, so pressing it ten seconds later
   // reverts the pin and nothing else that happened in between.
   const [toast, setToast] = useState(null)
+  const [writeBusy, setWriteBusy] = useState(false)
   const mapRef = useRef(null)
   const satelliteRef = useRef(null)
   const streetRef = useRef(null)
   const wrapperRef = useRef(null)
   const viewRef = useRef(initialView)
   const selected = customers.find((c) => c.id === selectedId)
+  const navigationCustomer = navigationIntent
+    ? customers.find((c) => c.id === navigationIntent.customerId)
+    : null
   // Only customers with a real location get a pin. The rest are listed behind
   // the legend; nothing here invents a coordinate to draw.
-  const located = customers.filter(hasLocation)
-  const needsPin = customersNeedingPin(customers)
+  const located = useMemo(() => customers.filter(hasLocation), [customers])
+  const needsPin = useMemo(() => customersNeedingPin(customers), [customers])
+  const scalePoints = useMemo(
+    () =>
+      located.map((customer) => ({
+        id: customer.id,
+        name: customer.name,
+        lat: customer.lat,
+        lng: customer.lng,
+        status: dueStatus(customer),
+        unconfirmed: needsPinConfirmation(customer),
+      })),
+    [located]
+  )
+  const directCustomerId = selectedId ?? navigationIntent?.customerId ?? null
   // Resolved from the live list rather than copied into state, so the banner
   // always names the customer the pin is actually going to.
   const placingCustomer =
@@ -355,6 +594,11 @@ export default function MapTab({
   const sheetOpen = !!selected || naming
   const showList = listOpen && needsPin.length > 0 && !placing
 
+  const selectCustomer = useCallback((customerId) => setSelectedId(customerId), [])
+  const toggleStatus = useCallback((status) => {
+    onStatusVisibilityChange((current) => ({ ...current, [status]: !current[status] }))
+  }, [onStatusVisibilityChange])
+
   useEffect(() => {
     if (!toast) return
     const t = setTimeout(() => setToast(null), toast.undo ? UNDO_MS : 2500)
@@ -364,29 +608,25 @@ export default function MapTab({
   // A lid is only visible in imagery, so placement mode takes him to imagery.
   // Once. If he switches to the street map himself while placing - to read a
   // house number, which is a real thing he does - nothing switches him back.
-  function showSatellite(map) {
+  const showSatellite = useCallback((map) => {
     const sat = satelliteRef.current
     const street = streetRef.current
     if (!sat || map.hasLayer(sat)) return
     if (street && map.hasLayer(street)) map.removeLayer(street)
     map.addLayer(sat)
-  }
+  }, [])
 
   // The one entrance to moving a pin. Both callers are explicit, named acts: the
   // FAB for a new lid, and "Move pin" / "Place pin" on a customer's own card.
   // Nothing on the map itself can start this.
-  function beginPlacing(next) {
+  const beginPlacing = useCallback((next, consumedIntent = navigationIntent) => {
     const map = mapRef.current
-    // A flyTo from "add customer" can still be in the air. Its centre is a
-    // moving target, and placement is about a fixed one. Freeze the map where he
-    // can see it, and give the target back - he interrupted the flight on
-    // purpose, so nothing should fly to it later. FlyToTarget's own contract is
-    // untouched: it is still the only thing that flies, and it still consumes on
-    // arrival.
+    // A show-on-map flight can still be in the air when the operator deliberately
+    // starts another placement. Freeze it before taking the current view.
     map.stop()
-    onFlyConsumed()
     const existing =
       next.mode === 'existing' ? customers.find((c) => c.id === next.customerId) : null
+    if (next.mode === 'existing' && !existing) return
     const here = map.getCenter()
     const returnTo = { center: [here.lat, here.lng], zoom: map.getZoom() }
     const view = placementView(existing, returnTo)
@@ -408,7 +648,17 @@ export default function MapTab({
       zoom: view.zoom,
       returnTo,
     })
-  }
+    if (consumedIntent) onNavigationConsumed(consumedIntent)
+  }, [customers, navigationIntent, onNavigationConsumed, showSatellite])
+
+  const showNavigation = useCallback((intent) => {
+    setSelectedId(intent.customerId)
+    onNavigationConsumed(intent)
+  }, [onNavigationConsumed])
+
+  const placeNavigation = useCallback((intent) => {
+    beginPlacing({ mode: 'existing', customerId: intent.customerId }, intent)
+  }, [beginPlacing])
 
   function resetPlacing() {
     setPlacing(null)
@@ -436,22 +686,42 @@ export default function MapTab({
   // an update and only an update: it touches his coordinates and nothing else -
   // and it is reversible for ten seconds, because the operator who is afraid of
   // breaking his own book is the one who never touches the map at all.
-  function savePlacedPin() {
+  async function savePlacedPin() {
+    if (writeBusy) return
     const c = placingCustomer
     const before = pinSnapshot(c)
-    onUpdateCustomer(c.id, manualLocationPatch(crosshairPoint()))
-    setToast({ message: `Pin saved for ${c.name}`, undo: { id: c.id, patch: before } })
-    // Stay where he is looking: the pin he just placed is under the crosshair.
-    resetPlacing()
+    setWriteBusy(true)
+    try {
+      await onSetPin(c.id, crosshairPoint())
+      setToast({ message: `Pin saved for ${c.name}`, undo: { id: c.id, patch: before } })
+      // Stay where he is looking: the pin he just placed is under the crosshair.
+      resetPlacing()
+    } catch {
+      setToast({ message: 'Could not save the pin. Try again.' })
+    } finally {
+      setWriteBusy(false)
+    }
   }
 
-  function undoPin() {
-    onUpdateCustomer(toast.undo.id, toast.undo.patch)
-    setToast({ message: 'Pin put back' })
+  async function undoPin() {
+    if (writeBusy || !toast?.undo) return
+    const undo = toast.undo
+    setWriteBusy(true)
+    try {
+      await onRestorePin(undo.id, undo.patch)
+      setToast({ message: 'Pin put back' })
+    } catch {
+      setToast({ message: 'Could not undo the pin. Try again.', undo })
+    } finally {
+      setWriteBusy(false)
+    }
   }
 
-  function saveNewCustomer() {
-    onAddCustomer({
+  async function saveNewCustomer() {
+    if (writeBusy) return
+    setWriteBusy(true)
+    try {
+      await onAddCustomer({
       name: draftName,
       address: draftAddress,
       phone: '',
@@ -463,9 +733,14 @@ export default function MapTab({
       lastPumped: todayISO(),
       cycleMonths: draftType === 'residential' ? 36 : 3,
       notes: '',
-    })
-    setToast({ message: `Lid pinned for ${draftName}` })
-    resetPlacing()
+      })
+      setToast({ message: `Lid pinned for ${draftName}` })
+      resetPlacing()
+    } catch {
+      setToast({ message: 'Could not save this customer. Try again.' })
+    } finally {
+      setWriteBusy(false)
+    }
   }
 
   // Hand the last view back to App on the way out. Read from a ref the map
@@ -513,7 +788,12 @@ export default function MapTab({
               inside FlyToTarget's effect. Subscribed second, RememberView would miss
               the only moveend that jump ever fires and hand back the pre-jump view. */}
           <RememberView storeRef={viewRef} />
-          <FlyToTarget target={flyTarget} onConsumed={onFlyConsumed} />
+          <NavigationTarget
+            intent={navigationIntent}
+            customer={navigationCustomer}
+            onShow={showNavigation}
+            onPlace={placeNavigation}
+          />
           <LayersControl position="topright">
             <LayersControl.BaseLayer checked name="Satellite">
               <TileLayer
@@ -539,27 +819,16 @@ export default function MapTab({
             onMoved={() => setPlacing((p) => (p && !p.moved ? { ...p, moved: true } : p))}
             onZoom={(z) => setPlacing((p) => (p && p.zoom !== z ? { ...p, zoom: z } : p))}
           />
-          {/* No pin on this map is draggable, in either mode and on either kind
-              of screen. A drag and a pan are the same gesture, so a draggable pin
-              turns an accidental hand movement into a recorded human placement
-              that outranks the geocoder everywhere afterwards. Pins answer a
-              click by opening their customer's card, and that is all they do. */}
-          {located.map((c) => (
-            <Marker
-              key={c.id}
-              position={[c.lat, c.lng]}
-              icon={
-                needsPinConfirmation(c) ? UNCONFIRMED_ICONS[dueStatus(c)] : ICONS[dueStatus(c)]
-              }
-              eventHandlers={{
-                click: () => {
-                  // While aiming, a pin is scenery: opening a card would bury
-                  // the crosshair under a sheet mid-placement.
-                  if (!placing) setSelectedId(c.id)
-                },
-              }}
-            />
-          ))}
+          {/* Customer visuals are scenery while aiming. The scale owner keeps
+              them non-interactive then, so a tap reaches PlacementMap and pans
+              the crosshair instead of opening a card. */}
+          <ScaleMarkers
+            points={scalePoints}
+            statusVisibility={statusVisibility}
+            directCustomerId={directCustomerId}
+            placing={!!placing}
+            onSelect={selectCustomer}
+          />
           {naming && (
             <Marker position={[newPoint.lat, newPoint.lng]} icon={DRAFT_ICON} interactive={false} />
           )}
@@ -570,14 +839,16 @@ export default function MapTab({
               customers={needsPin}
               onPick={(c) => beginPlacing({ mode: 'existing', customerId: c.id })}
               onClose={() => setListOpen(false)}
-              hiddenOnMobile={sheetOpen}
+              hiddenOnMobile={sheetOpen || !!toast}
             />
           ) : (
             <Legend
               located={located}
+              statusVisibility={statusVisibility}
+              onToggleStatus={toggleStatus}
               needsPinCount={needsPin.length}
               onShowNeedsPin={() => setListOpen(true)}
-              hiddenOnMobile={sheetOpen}
+              hiddenOnMobile={sheetOpen || !!toast}
             />
           ))}
         {aiming && (
@@ -599,7 +870,10 @@ export default function MapTab({
         {!placing && !selected && (
           <button
             onClick={() => beginPlacing({ mode: 'new' })}
-            className="absolute bottom-6 right-3 z-[1100] rounded-2xl bg-blue-700 px-5 py-3 text-base font-bold text-white shadow-lg hover:bg-blue-800"
+            className={
+              'absolute bottom-6 right-3 z-[1100] rounded-2xl bg-blue-700 px-5 py-3 text-base font-bold text-white shadow-lg hover:bg-blue-800 ' +
+              (toast ? 'hidden sm:block' : '')
+            }
           >
             + Drop lid pin
           </button>
@@ -610,6 +884,7 @@ export default function MapTab({
           customer={selected}
           onClose={() => setSelectedId(null)}
           onUpdate={(patch) => onUpdateCustomer(selected.id, patch)}
+          onMarkPumped={() => onMarkPumped(selected.id)}
           onMovePin={() => beginPlacing({ mode: 'existing', customerId: selected.id })}
         />
       )}
@@ -635,6 +910,7 @@ export default function MapTab({
           message={toast.message}
           actionLabel="Undo"
           onAction={toast.undo ? undoPin : undefined}
+          busy={writeBusy}
         />
       )}
     </div>

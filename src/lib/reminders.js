@@ -14,6 +14,7 @@ function startOfToday() {
 // is "Sent" (with its real sent date from sentAt). A past send date does NOT
 // auto-send or auto-expire — picking the still-relevant ones is scheduledReminders().
 export function remindersFor(customer, sentIds = [], sentAt = {}) {
+  if (!nextDue(customer)) return []
   const make = (daysBefore, channel) => {
     const sendDate = nextDue(customer)
     sendDate.setDate(sendDate.getDate() - daysBefore)
@@ -50,7 +51,8 @@ export function remindersFor(customer, sentIds = [], sentAt = {}) {
 // (send date today/past) vs upcoming (send date in the future).
 export function remindersForCustomer(customer, sentIds = [], sentAt = {}) {
   const today = startOfToday()
-  if (nextDue(customer) < today) return [] // overdue → drops out of the queue
+  const due = nextDue(customer)
+  if (!due || due < today) return [] // unknown/overdue → drops out of the queue
   return remindersFor(customer, sentIds, sentAt)
     .filter((r) => r.status !== 'Sent')
     .map((r) => ({ ...r, dueNow: r.sendDate < today }))

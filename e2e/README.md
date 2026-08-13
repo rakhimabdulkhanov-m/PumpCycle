@@ -4,6 +4,17 @@ These are Playwright-Core headless-Chromium scripts that were verified green aga
 production build on 2026-08-10. They are evidence artifacts: do not reformat, rewrite, or
 convert them to Vitest. A fresh agent must be able to re-run exactly what was run on that date.
 
+New maintained regressions live beside those frozen evidence artifacts and may be updated with
+the behavior they protect:
+
+- `ux_map_app.mjs` — mobile Undo geometry and exact undo; App-owned Add draft/discard/success;
+  intercepted exact/road/locality/pinless/far/pending/race geocodes; Due Show/Place exact-ID
+  navigation and queue state; live-bootstrap demo-data isolation. Run against the port 4212
+  preview with `node e2e/ux_map_app.mjs`, or set `PUMPCYCLE_E2E_URL` for a local Worker.
+- `scale_benchmark.mjs` — deterministic 1,000-customer phone/CPU-throttled map benchmark with
+  cluster/canvas/DOM count invariants. Build, run Wrangler on port 8787, then execute
+  `node e2e/scale_benchmark.mjs`.
+
 ## Prerequisites
 
 - Node installed (project already has `playwright-core` in devDependencies)

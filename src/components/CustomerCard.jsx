@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { nextDue, daysUntilDue, dueStatus, formatDate, todayISO, isCommercial } from '../lib/dates.js'
+import { nextDue, daysUntilDue, dueStatus, formatDate, isCommercial } from '../lib/dates.js'
 import { pinSource } from '../lib/location.js'
 
 const STATUS_STYLES = {
@@ -57,9 +57,18 @@ const PIN_NOTE = {
 // The two settled cases are not a warning, so they are not dressed as one.
 const SETTLED_NOTE = new Set(['placed', 'lookup'])
 
-export default function CustomerCard({ customer, onClose, onUpdate, onMovePin }) {
+export default function CustomerCard({
+  customer,
+  onClose,
+  onUpdate,
+  onMarkPumped,
+  onMovePin,
+  onMapAction,
+}) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(null)
+  const [savingAction, setSavingAction] = useState(null)
+  const [writeError, setWriteError] = useState('')
   const bodyRef = useRef(null)
 
   useEffect(() => {
@@ -72,8 +81,9 @@ export default function CustomerCard({ customer, onClose, onUpdate, onMovePin })
   const hasPin = source !== 'no_location'
   const commercial = isCommercial(customer)
   const days = daysUntilDue(customer)
-  const dueLabel =
-    status === 'overdue'
+  const dueLabel = !Number.isFinite(days)
+    ? 'Pump date unknown'
+    : status === 'overdue'
       ? `${formatDate(nextDue(customer))} — ${-days} days overdue`
       : `${formatDate(nextDue(customer))} — in ${days} days`
 
@@ -82,18 +92,40 @@ export default function CustomerCard({ customer, onClose, onUpdate, onMovePin })
     setEditing(true)
   }
 
-  function saveEdit() {
-    onUpdate({
-      name: draft.name,
-      address: draft.address,
-      phone: draft.phone,
-      email: draft.email,
-      tankSizeGal: Number(draft.tankSizeGal),
-      lastPumped: draft.lastPumped,
-      cycleMonths: Number(draft.cycleMonths) || 36,
-      notes: draft.notes,
-    })
-    setEditing(false)
+  async function saveEdit() {
+    if (savingAction) return
+    setSavingAction('edit')
+    setWriteError('')
+    try {
+      await onUpdate({
+        name: draft.name,
+        address: draft.address,
+        phone: draft.phone,
+        email: draft.email,
+        tankSizeGal: Number(draft.tankSizeGal),
+        lastPumped: draft.lastPumped || null,
+        cycleMonths: Number(draft.cycleMonths) || 36,
+        notes: draft.notes,
+      })
+      setEditing(false)
+    } catch {
+      setWriteError('Could not save. Try again.')
+    } finally {
+      setSavingAction(null)
+    }
+  }
+
+  async function markPumped() {
+    if (savingAction) return
+    setSavingAction('pumped')
+    setWriteError('')
+    try {
+      await onMarkPumped()
+    } catch {
+      setWriteError('Could not mark this customer pumped. Try again.')
+    } finally {
+      setSavingAction(null)
+    }
   }
 
   const set = (key) => (e) => setDraft({ ...draft, [key]: e.target.value })
@@ -192,11 +224,20 @@ export default function CustomerCard({ customer, onClose, onUpdate, onMovePin })
 
           <div className="mt-4 flex flex-col gap-2">
             <button
-              onClick={() => onUpdate({ lastPumped: todayISO() })}
-              className="w-full rounded-lg bg-green-700 px-4 py-3 text-lg font-semibold text-white hover:bg-green-800"
+              onClick={markPumped}
+              disabled={!!savingAction}
+              className="w-full rounded-lg bg-green-700 px-4 py-3 text-lg font-semibold text-white hover:bg-green-800 disabled:opacity-60"
             >
-              Mark pumped today
+              {savingAction === 'pumped' ? 'Saving...' : 'Mark pumped today'}
             </button>
+            {onMapAction && (
+              <button
+                onClick={onMapAction}
+                className="w-full rounded-lg bg-blue-700 px-4 py-3 text-lg font-semibold text-white hover:bg-blue-800"
+              >
+                {hasPin ? 'Show on map' : 'Place pin on map'}
+              </button>
+            )}
             {/* The one entrance to placing or moving a pin: named, and pressed on
                 purpose. Nothing on the map itself can start it, which is why a
                 pan can no longer move a customer's lid. Absent on the Due tab,
@@ -253,7 +294,7 @@ export default function CustomerCard({ customer, onClose, onUpdate, onMovePin })
             <input
               type="date"
               className={inputCls}
-              value={draft.lastPumped}
+              value={draft.lastPumped || ''}
               onChange={set('lastPumped')}
             />
           </Field>
@@ -278,9 +319,10 @@ export default function CustomerCard({ customer, onClose, onUpdate, onMovePin })
           <div className="mt-4 flex gap-2">
             <button
               onClick={saveEdit}
-              className="flex-1 rounded-lg bg-blue-700 px-4 py-3 text-lg font-semibold text-white hover:bg-blue-800"
+              disabled={!!savingAction}
+              className="flex-1 rounded-lg bg-blue-700 px-4 py-3 text-lg font-semibold text-white hover:bg-blue-800 disabled:opacity-60"
             >
-              Save
+              {savingAction === 'edit' ? 'Saving...' : 'Save'}
             </button>
             <button
               onClick={() => setEditing(false)}
@@ -290,6 +332,11 @@ export default function CustomerCard({ customer, onClose, onUpdate, onMovePin })
             </button>
           </div>
         </>
+      )}
+      {writeError && (
+        <p role="alert" className="mt-3 text-base font-semibold text-red-700">
+          {writeError}
+        </p>
       )}
       </div>
     </div>

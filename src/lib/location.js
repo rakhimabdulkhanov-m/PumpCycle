@@ -1,4 +1,4 @@
-import { hasLocation } from './storage.js'
+import { hasLocation } from './point.js'
 
 /**
  * How close the map should get for a pin of this precision. A road match at zoom

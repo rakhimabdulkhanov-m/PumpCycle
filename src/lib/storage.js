@@ -1,6 +1,6 @@
 import seed from '../data/seed.json'
 import { todayISO, shiftISO, daysBetween } from './dates.js'
-import { isSanePoint } from './point.js'
+import { hasLocation, isSanePoint } from './point.js'
 import { newCustomerId } from './ids.js'
 
 const KEY = 'pumpcycle-demo-v4'
@@ -49,7 +49,7 @@ function coord(v) {
  * dates and reminders he cannot retype, and is simply absent from the map's pin
  * layer until someone drops the pin. loadState re-saves, so the repair sticks.
  */
-function normalizeLocation(c) {
+export function normalizeLocation(c) {
   const lat = coord(c.lat)
   const lng = coord(c.lng)
   // Both or neither, which is the rule the D1 schema states as
@@ -94,7 +94,7 @@ function normalizeLocation(c) {
  * those keys were ambiguous between the two rows anyway, and a reminder sent
  * twice is a smaller failure than two customers that cannot be told apart.
  */
-function withUniqueIds(customers) {
+export function withUniqueIds(customers) {
   const seen = new Set()
   return customers.map((c) => {
     const id = c.id === undefined || c.id === null || c.id === '' ? null : c.id
@@ -113,13 +113,13 @@ function withUniqueIds(customers) {
  * else that touches a coordinate: typeof x === 'number' is also true of NaN,
  * which is the value that crashes Leaflet on first render.
  */
-export function hasLocation(c) {
-  return !!c && isSanePoint(c.lat, c.lng)
-}
+// Compatibility export. The predicate lives in point.js so importing map or
+// location helpers never pulls the demo seed into a live bundle.
+export { hasLocation }
 
 // Shifts dates forward and defensively normalizes the email field so any older
 // stored shape (pre-email) reads as an empty string rather than undefined.
-function shiftCustomers(customers, days) {
+export function shiftCustomers(customers, days) {
   return customers.map((c) =>
     normalizeLocation({
       ...c,

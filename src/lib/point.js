@@ -49,3 +49,8 @@ export function isSanePoint(lat, lng) {
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false
   return US_BOXES.some(([s, n, w, e]) => lat >= s && lat <= n && lng >= w && lng <= e)
 }
+
+/** True only when a record carries a drawable, sane point. */
+export function hasLocation(record) {
+  return !!record && isSanePoint(record.lat, record.lng)
+}

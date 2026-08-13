@@ -75,7 +75,12 @@ describe('isSanePoint - the United States box', () => {
 
 describe('the client and the Worker stay twins', () => {
   it('is the same function on both sides', () => {
-    expect(isSanePoint.toString()).toBe(workerIsSanePoint.toString())
+    // Git may check one side out as CRLF and the other as LF on Windows. The
+    // functions must remain source-identical; line-ending bytes are irrelevant.
+    const normalizeLines = (source) => source.replace(/\r\n/g, '\n')
+    expect(normalizeLines(isSanePoint.toString())).toBe(
+      normalizeLines(workerIsSanePoint.toString())
+    )
   })
 
   it('agrees on every point above, boxes included', () => {

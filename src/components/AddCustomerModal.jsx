@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
-import { todayISO } from '../lib/dates.js'
 import { geocodeAddress } from '../lib/geocode.js'
 import { zoomForPrecision } from '../lib/location.js'
+import { compactMatchedAddress, isAddCustomerDraftDirty } from '../lib/addCustomerDraft.js'
 
 const inputCls =
   'mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-lg focus:border-blue-600 focus:outline-none'
@@ -18,50 +18,41 @@ function Field({ label, children }) {
 }
 
 /**
- * Copy per precision. Road is styled as a SUCCESS: landing on the right road is
- * most of the job when the next step is dragging the pin onto a tank lid anyway.
- * Both road and town are saved AND flagged - the map lists them under "Needs a
- * pin" until someone puts the pin on the lid - so the copy promises exactly that
- * rather than implying the address is finished.
+ * Copy per precision. A road or locality is useful context for placement, but
+ * never a completed property location.
  */
 const PRECISION_COPY = {
   house: { good: true, line: '' },
   house_approx: { good: true, line: '' },
   road: {
-    good: true,
-    line: 'Found the road, not the house. Drag the pin onto the property after saving.',
+    good: false,
+    line: 'Exact property not found. Add the customer, then place the pin on the property.',
   },
   locality: {
     good: false,
-    line: 'Found the town, not the address. Saved as town-level: it stays under "Needs a pin" on the map until you drop the pin on the lid.',
+    line: 'Exact property not found. Add the customer, then place the pin on the property.',
   },
 }
 
-// What happens after Save when there is no location: he lands under "Needs a
-// pin" on the map, which is a button that lists him and puts the map into
-// placement mode for him. The copy names that button, because "drop the pin on
-// the map" used to describe a flow that did not exist.
-const NO_PIN_NEXT_STEP = 'Save, then tap "Needs a pin" on the map to place him.'
+const NO_PIN_NEXT_STEP = 'Add the customer, then place the pin on the map.'
 const MISS_COPY = {
   ungeocodable_po_box: `That is a mailing address, not a street address. ${NO_PIN_NEXT_STEP}`,
   ungeocodable_rural_route: `That is a mailing address, not a street address. ${NO_PIN_NEXT_STEP}`,
-  rate_limited: 'Too many address lookups just now. Wait a minute and press Find.',
+  rate_limited: 'Too many address lookups just now. Wait a minute and press Locate.',
 }
 const MISS_DEFAULT = `Couldn't find it. ${NO_PIN_NEXT_STEP}`
 
 const milesFromKm = (km) => Math.round(km * 0.621371)
 
-export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
-  const [form, setForm] = useState({
-    name: '',
-    address: '',
-    phone: '',
-    email: '',
-    tankSizeGal: '1000',
-    lastPumped: todayISO(),
-    cycleMonths: '36',
-    notes: '',
-  })
+export default function AddCustomerModal({
+  draft,
+  defaults,
+  onDraftChange,
+  onAdd,
+  onClose,
+  onDiscard,
+  mapCenter,
+}) {
   const [geocoding, setGeocoding] = useState(false)
   // A geocode outcome is always stored together with the address it belongs to:
   // { address, result, suggestions, reason, farOk }. Nothing downstream reads it
@@ -81,11 +72,14 @@ export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
   // that await runs submit twice and saves the customer twice - the modal
   // normally unmounts before a second click can land, and awaiting keeps it up.
   const [submitting, setSubmitting] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
 
-  const address = form.address.trim()
+  const address = draft.address.trim()
   const geoForCurrentAddress = geo && geo.address === address ? geo : null
+  const dirty = isAddCustomerDraftDirty(draft, defaults)
 
-  const set = (key) => (e) => setForm({ ...form, [key]: e.target.value })
+  const set = (key) => (e) => onDraftChange({ ...draft, [key]: e.target.value })
 
   function handleAddressChange(e) {
     const next = e.target.value
@@ -96,7 +90,7 @@ export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
       requestId.current++ // retire any in-flight lookup: its answer is now stale
       setGeocoding(false) // ...and re-enable Find for the address being typed
     }
-    setForm({ ...form, address: next })
+    onDraftChange({ ...draft, address: next })
   }
 
   /** Resolves to the geo state this lookup produced, or null if it was retired. */
@@ -140,7 +134,7 @@ export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
     requestId.current++ // an explicit choice beats anything still in flight
     setGeocoding(false)
     const label = s.label
-    setForm({ ...form, address: label })
+    onDraftChange({ ...draft, address: label })
     setGeo({
       address: label.trim(),
       // A suggestion is a deliberate pick off a list that spells out the county
@@ -192,15 +186,18 @@ export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
         effective = answered.result.far_from_near ? null : answered.result
       }
     }
-    save(effective)
+    await save(effective)
   }
 
   /** @param {object|null} found - the location to save with, already vetted. */
-  function save(found) {
-    onAdd({
-      ...form,
-      tankSizeGal: Number(form.tankSizeGal),
-      cycleMonths: Number(form.cycleMonths) || 36,
+  async function save(found) {
+    setSubmitting(true)
+    setSaveError('')
+    try {
+      await onAdd({
+      ...draft,
+      tankSizeGal: Number(draft.tankSizeGal),
+      cycleMonths: Number(draft.cycleMonths) || 36,
       // No pin is invented. A customer with no location is a real state: he is
       // absent from the map until someone drops the pin, which beats a random
       // pin near Gastonia landing in the wrong state for a Pennsylvania client.
@@ -216,7 +213,16 @@ export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
       // Signals to App that there is somewhere to fly to, and how close.
       geocoded: !!found,
       flyZoom: found ? zoomForPrecision(found.precision) : null,
-    })
+      })
+    } catch {
+      setSaveError('Could not add this customer. Try again.')
+      setSubmitting(false)
+    }
+  }
+
+  function requestClose() {
+    if (dirty) setConfirmDiscard(true)
+    else onClose()
   }
 
   const precisionCopy = hit ? PRECISION_COPY[hit.precision] : null
@@ -224,25 +230,23 @@ export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
   return (
     <div
       className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/40 p-4"
-      onClick={onClose}
     >
       <form
         onSubmit={submit}
         // A stray Enter in a text field used to submit the whole form, saving the
         // customer before the address was ever geocoded. Saving is a deliberate
         // click on "Add customer". Textareas (Notes) keep their newlines, and the
-        // address field's own Enter handler still runs "Find" before this fires.
+        // address field's own Enter handler still runs "Locate" before this fires.
         onKeyDown={(e) => {
           if (e.key === 'Enter' && e.target.tagName === 'INPUT') e.preventDefault()
         }}
         className="flex max-h-full w-full max-w-md flex-col rounded-xl bg-white shadow-xl"
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between border-b border-gray-200 p-6 pb-3">
           <h2 className="text-2xl font-bold text-gray-900">Add customer</h2>
           <button
             type="button"
-            onClick={onClose}
+            onClick={requestClose}
             aria-label="Close"
             className="text-3xl leading-none text-gray-400 hover:text-gray-600"
           >
@@ -252,10 +256,10 @@ export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
 
         <div className="min-h-0 flex-1 overflow-y-auto p-6 pt-2">
           <Field label="Name">
-            <input className={inputCls} value={form.name} onChange={set('name')} required />
+            <input className={inputCls} value={draft.name} onChange={set('name')} required />
           </Field>
 
-          {/* Address row: input + "Find on map" button side by side. The outcome
+          {/* Address row: input + "Locate" button side by side. The outcome
               lines live outside the <label> so that tapping a suggestion is not
               also forwarded to the input as a focus. */}
           <div className="py-1.5">
@@ -266,10 +270,10 @@ export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
               <div className="flex gap-2">
                 <input
                   className={inputCls + ' flex-1'}
-                  value={form.address}
+                  value={draft.address}
                   onChange={handleAddressChange}
                   // Auto-lookup on blur: the address is complete the moment he
-                  // moves to the next field. Find stays as a visible retry - this
+                  // moves to the next field. Locate stays as a visible retry - this
                   // owner is 55-65 and a button he can point at beats magic.
                   onBlur={() => findOnMap()}
                   onKeyDown={(e) => {
@@ -286,7 +290,7 @@ export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
                   disabled={!address || geocoding}
                   className="mt-1 rounded-lg bg-blue-700 px-3 py-2 text-base font-semibold text-white hover:bg-blue-800 disabled:opacity-40"
                 >
-                  {geocoding ? '...' : 'Find'}
+                  {geocoding ? '...' : g ? 'Locate again' : 'Locate'}
                 </button>
               </div>
             </label>
@@ -317,7 +321,8 @@ export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
                     (precisionCopy.line ? '' : ' font-semibold')
                   }
                 >
-                  Found: {hit.matched}
+                  {precisionCopy.good ? 'Located: ' : 'Matched: '}
+                  {compactMatchedAddress(hit.matched)}
                 </p>
               </div>
             )}
@@ -328,7 +333,9 @@ export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
                   This is {milesFromKm(g.result.distance_km)} miles from your other
                   customers. Use it anyway?
                 </p>
-                <p className="mt-0.5 text-sm text-amber-800">{g.result.matched}</p>
+                <p className="mt-0.5 text-sm text-amber-800">
+                  {compactMatchedAddress(g.result.matched)}
+                </p>
                 <button
                   type="button"
                   onClick={() => setGeo({ ...g, farOk: true })}
@@ -352,7 +359,7 @@ export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
                       onClick={() => pickSuggestion(s)}
                       className="block w-full px-3 py-2 text-left text-base text-blue-800 hover:bg-blue-50"
                     >
-                      {s.label}
+                      {compactMatchedAddress(s.label)}
                     </button>
                   ))}
                 </div>
@@ -367,13 +374,13 @@ export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
           </div>
 
           <Field label="Phone">
-            <input className={inputCls} value={form.phone} onChange={set('phone')} />
+            <input className={inputCls} value={draft.phone} onChange={set('phone')} />
           </Field>
           <Field label="Email">
-            <input type="email" className={inputCls} value={form.email} onChange={set('email')} />
+            <input type="email" className={inputCls} value={draft.email} onChange={set('email')} />
           </Field>
           <Field label="Tank size (gal)">
-            <select className={inputCls} value={form.tankSizeGal} onChange={set('tankSizeGal')}>
+            <select className={inputCls} value={draft.tankSizeGal} onChange={set('tankSizeGal')}>
               <option value="1000">1,000</option>
               <option value="1250">1,250</option>
               <option value="1500">1,500</option>
@@ -383,7 +390,7 @@ export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
             <input
               type="date"
               className={inputCls}
-              value={form.lastPumped}
+              value={draft.lastPumped}
               onChange={set('lastPumped')}
               required
             />
@@ -393,12 +400,12 @@ export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
               type="number"
               min="1"
               className={inputCls}
-              value={form.cycleMonths}
+              value={draft.cycleMonths}
               onChange={set('cycleMonths')}
             />
           </Field>
           <Field label="Notes">
-            <textarea rows="2" className={inputCls} value={form.notes} onChange={set('notes')} />
+            <textarea rows="2" className={inputCls} value={draft.notes} onChange={set('notes')} />
           </Field>
 
           <div className="mt-4 flex gap-2">
@@ -411,14 +418,58 @@ export default function AddCustomerModal({ onAdd, onClose, mapCenter }) {
             </button>
             <button
               type="button"
-              onClick={onClose}
+              onClick={requestClose}
               className="flex-1 rounded-lg border-2 border-gray-300 px-4 py-3 text-lg font-semibold text-gray-700 hover:bg-gray-100"
             >
               Cancel
             </button>
           </div>
+          {saveError && (
+            <p role="alert" className="mt-3 text-base font-semibold text-red-700">
+              {saveError}
+            </p>
+          )}
         </div>
       </form>
+      {confirmDiscard && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="discard-add-title"
+          className="fixed inset-0 z-[1300] flex items-center justify-center bg-black/45 p-4"
+        >
+          <div className="w-full max-w-sm rounded-xl bg-white p-5 shadow-2xl">
+            <h3 id="discard-add-title" className="text-xl font-bold text-gray-900">
+              Discard this customer?
+            </h3>
+            <p className="mt-2 text-base text-gray-600">Keep the draft for later, or discard it.</p>
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row-reverse">
+              <button
+                type="button"
+                onClick={onDiscard}
+                className="min-h-12 flex-1 rounded-lg bg-red-700 px-4 py-3 text-lg font-bold text-white hover:bg-red-800"
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setConfirmDiscard(false)}
+                className="min-h-12 flex-1 rounded-lg border-2 border-gray-300 px-4 py-3 text-lg font-bold text-gray-800 hover:bg-gray-100"
+              >
+                Keep editing
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="min-h-12 flex-1 rounded-lg border-2 border-blue-300 px-4 py-3 text-lg font-bold text-blue-800 hover:bg-blue-50"
+              >
+                Close and keep draft
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

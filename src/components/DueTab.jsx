@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { daysUntilDue, nextDue, dueStatus, formatDate } from '../lib/dates.js'
 import { scheduledCount } from '../lib/reminders.js'
+import { hasLocation } from '../lib/point.js'
 import CustomerCard from './CustomerCard.jsx'
-import AddCustomerModal from './AddCustomerModal.jsx'
 
 const FILTERS = [
   { id: 'all', label: 'All' },
@@ -55,10 +55,14 @@ function PriceSettings({ avgJobPrice, onChange }) {
             </span>
             <input
               type="number"
-              min="0"
+              min="0.01"
+              step="0.01"
               value={avgJobPrice}
               onFocus={(e) => e.target.select()}
-              onChange={(e) => onChange(Number(e.target.value) || 0)}
+              onChange={(e) => {
+                const value = Number(e.target.value)
+                if (Number.isFinite(value) && value > 0) onChange(value)
+              }}
               className="mt-1 block w-full rounded-lg border border-gray-300 px-3 py-2 text-lg focus:border-blue-600 focus:outline-none"
             />
           </label>
@@ -79,14 +83,35 @@ export default function DueTab({
   settings,
   sentReminders,
   onUpdateCustomer,
-  onAddCustomer,
+  onMarkPumped,
   onSetAvgJobPrice,
-  mapCenter,
+  onRequestAdd,
+  onNavigateCustomer,
+  view,
+  onViewChange,
 }) {
-  const [filter, setFilter] = useState('all')
-  const [searchQuery, setSearchQuery] = useState('')
   const [selectedId, setSelectedId] = useState(null)
-  const [adding, setAdding] = useState(false)
+  const scrollerRef = useRef(null)
+  const scrollTopRef = useRef(view.scrollTop)
+  const viewRef = useRef(view)
+
+  useEffect(() => {
+    viewRef.current = view
+  }, [view])
+
+  useEffect(() => {
+    if (scrollerRef.current) scrollerRef.current.scrollTop = scrollTopRef.current
+    return () => {
+      onViewChange({ ...viewRef.current, scrollTop: scrollTopRef.current })
+    }
+  }, [onViewChange])
+
+  const updateView = (patch) =>
+    onViewChange({ ...view, scrollTop: scrollTopRef.current, ...patch })
+
+  const filter = view.filter
+  const searchQuery = view.searchQuery
+  const limit = Number.isSafeInteger(view.limit) && view.limit > 0 ? view.limit : 100
 
   const selected = customers.find((c) => c.id === selectedId)
 
@@ -106,10 +131,17 @@ export default function DueTab({
         c.address.toLowerCase().includes(q)
     )
     .sort((a, b) => nextDue(a) - nextDue(b))
+  const visibleRows = rows.slice(0, Math.min(limit, 100))
 
   return (
     <div className="relative h-full">
-      <div className="h-full overflow-y-auto">
+      <div
+        ref={scrollerRef}
+        className="h-full overflow-y-auto"
+        onScroll={(e) => {
+          scrollTopRef.current = e.currentTarget.scrollTop
+        }}
+      >
         <div className="mx-auto max-w-3xl p-4 sm:p-6">
           <div className="flex flex-wrap items-start gap-3">
             <Counter
@@ -133,7 +165,7 @@ export default function DueTab({
                 onChange={onSetAvgJobPrice}
               />
               <button
-                onClick={() => setAdding(true)}
+                onClick={onRequestAdd}
                 className="rounded-lg bg-blue-700 px-4 py-2 text-base font-semibold text-white hover:bg-blue-800"
               >
                 + Add customer
@@ -144,7 +176,7 @@ export default function DueTab({
           <input
             type="text"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => updateView({ searchQuery: e.target.value, limit: 100 })}
             placeholder="Search name or address"
             className="mt-5 w-full rounded-lg border border-gray-300 px-3 py-2 text-base focus:border-blue-600 focus:outline-none"
           />
@@ -153,7 +185,7 @@ export default function DueTab({
             {FILTERS.map((f) => (
               <button
                 key={f.id}
-                onClick={() => setFilter(f.id)}
+                onClick={() => updateView({ filter: f.id, limit: 100 })}
                 className={
                   'rounded-full px-4 py-2 text-base font-semibold ' +
                   (filter === f.id
@@ -167,10 +199,11 @@ export default function DueTab({
           </div>
 
           <div className="mt-4 divide-y divide-gray-200 rounded-xl border border-gray-200 bg-white">
-            {rows.map((c) => {
+            {visibleRows.map((c) => {
               const days = daysUntilDue(c)
-              const chip =
-                days < 0 ? `${-days} days overdue` : `in ${days} days`
+              const chip = !Number.isFinite(days)
+                ? 'pump date unknown'
+                : days < 0 ? `${-days} days overdue` : `in ${days} days`
               return (
                 <button
                   key={c.id}
@@ -187,7 +220,7 @@ export default function DueTab({
                   </div>
                   <div className="text-right">
                     <div className="text-base font-medium text-gray-700">
-                      {formatDate(nextDue(c))}
+                      {Number.isFinite(days) ? formatDate(nextDue(c)) : 'Date unknown'}
                     </div>
                     <span
                       className={`inline-block rounded-full px-3 py-0.5 text-base font-semibold ${CHIP_STYLES[dueStatus(c)]}`}
@@ -203,6 +236,11 @@ export default function DueTab({
                 No customers match
               </div>
             )}
+            {visibleRows.length < rows.length && (
+              <div className="px-4 py-3 text-center text-base font-medium text-gray-600">
+                Showing first 100. Search to narrow the list.
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -212,16 +250,11 @@ export default function DueTab({
           customer={selected}
           onClose={() => setSelectedId(null)}
           onUpdate={(patch) => onUpdateCustomer(selected.id, patch)}
-        />
-      )}
-      {adding && (
-        <AddCustomerModal
-          onAdd={(fields) => {
-            onAddCustomer(fields)
-            setAdding(false)
+          onMarkPumped={() => onMarkPumped(selected.id)}
+          onMapAction={() => {
+            onViewChange({ ...viewRef.current, scrollTop: scrollTopRef.current })
+            onNavigateCustomer(hasLocation(selected) ? 'show' : 'place', selected.id)
           }}
-          onClose={() => setAdding(false)}
-          mapCenter={mapCenter}
         />
       )}
     </div>

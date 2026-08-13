@@ -25,7 +25,16 @@ const check = (label, ok, detail = '') => {
 }
 
 const browser = await chromium.launch({ executablePath: EXE })
-const page = await (await browser.newContext({ viewport: { width: 1400, height: 900 } })).newPage()
+const context = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+const transparentPng = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64'
+)
+const blockTile = (route) =>
+  route.fulfill({ status: 200, contentType: 'image/png', body: transparentPng })
+await context.route(/^https:\/\/server\.arcgisonline\.com\//, blockTile)
+await context.route(/^https:\/\/[a-z]\.tile\.openstreetmap\.org\//, blockTile)
+const page = await context.newPage()
 const errs = []
 page.on('pageerror', (e) => errs.push('PAGEERROR ' + e.message))
 page.on('console', (m) => {
@@ -35,15 +44,40 @@ page.on('console', (m) => {
 const customers = () =>
   page.evaluate((k) => JSON.parse(localStorage.getItem(k)).customers, KEY)
 const byName = async (name) => (await customers()).find((c) => c.name === name)
-const markerCount = () => page.locator('.leaflet-marker-icon').count()
+const scaleSnapshot = () =>
+  page.locator('.leaflet-container').evaluate((container) => ({
+    mode: container.dataset.mapScaleMode,
+    eligible: Number(container.dataset.mapScaleEligibleCount),
+    rendered: Number(container.dataset.mapScaleRenderedPointCount),
+    visuals: Number(container.dataset.mapScaleVisualCount),
+    domHook: Number(container.dataset.mapScaleDomMarkerCount),
+    dom: document.querySelectorAll('.map-customer-marker').length,
+  }))
 
-// Leaflet keeps every marker in the DOM, on screen or not, so ".first()" is the
-// first customer in the book and not the one being looked at. This is the pin
-// nearest the middle of the window, i.e. the one the map was just flown to.
+async function markerForCustomer(customer, zoom = 17) {
+  await page.evaluate(
+    ({ lat, lng, zoom }) => window.__map.setView([lat, lng], zoom, { animate: false }),
+    { lat: customer.lat, lng: customer.lng, zoom }
+  )
+  await page.waitForFunction(
+    (id) =>
+      document.querySelector('.leaflet-container')?.dataset.mapScaleMode === 'pins' &&
+      [...document.querySelectorAll('.map-customer-marker')].some(
+        (element) => element.dataset.customerId === id
+      ),
+    String(customer.id)
+  )
+  return page.locator(
+    `.map-customer-marker[data-customer-id=${JSON.stringify(String(customer.id))}]`
+  )
+}
+
+// At high zoom Leaflet owns only the padded local subset. This is the exact
+// customer pin nearest the middle of the window, i.e. the one just flown to.
 async function markerNearCenter() {
   const vp = page.viewportSize()
   const all = await Promise.all(
-    (await page.locator('.leaflet-marker-icon').all()).map(async (m) => ({ m, b: await m.boundingBox() }))
+    (await page.locator('.map-customer-marker').all()).map(async (m) => ({ m, b: await m.boundingBox() }))
   )
   return all
     .filter((x) => x.b)
@@ -53,7 +87,7 @@ async function markerNearCenter() {
     }))
     .sort((a, b) => a.d - b.d)[0]
 }
-const hollowCount = () => page.locator('.leaflet-marker-icon.pin-unconfirmed').count()
+const hollowCount = () => page.locator('.map-customer-marker.pin-unconfirmed').count()
 
 // The live Leaflet instance, found through the React fiber tree (no app changes).
 async function wireMap() {
@@ -70,10 +104,10 @@ async function findMap() {
     const f0 = root[Object.keys(root).find((k) => k.startsWith('__reactContainer$'))]
     let map = null
     const walk = (n, d) => {
-      if (!n || d > 30 || map) return
+      if (!n || d > 40 || map) return
       let h = n.memoizedState
       let i = 0
-      while (h && i < 20) {
+      while (h && i < 30) {
         const s = h.memoizedState
         if (s && typeof s === 'object' && s.map && typeof s.map.flyTo === 'function') {
           map = s.map
@@ -85,7 +119,10 @@ async function findMap() {
       walk(n.child, d + 1)
       walk(n.sibling, d + 1)
     }
-    walk(f0, 0)
+    // After a tab switch React's current tree may be the root fiber's alternate;
+    // stateNode.current is authoritative while the container expando can still
+    // point at the tree that just unmounted MapTab.
+    walk(f0.stateNode?.current || f0, 0)
     window.__map = map
     return !!map
   })
@@ -138,9 +175,21 @@ await page.waitForTimeout(2500)
 await wireMap()
 const seeded = await customers()
 check('70 customers loaded without a login screen', seeded.length === 70, `${seeded.length}`)
-const pins = await markerCount()
-check('70 pins on the map', pins === 70, `${pins} markers`)
-check('none of them is drawn unconfirmed', (await hollowCount()) === 0, `${await hollowCount()} hollow`)
+const initialScale = await scaleSnapshot()
+check(
+  'all 70 customers are eligible in the low-zoom cluster layer',
+  initialScale.mode === 'clusters' &&
+    initialScale.eligible === 70 &&
+    initialScale.rendered === 70 &&
+    initialScale.dom === 0 &&
+    initialScale.domHook === 0,
+  JSON.stringify(initialScale)
+)
+const firstSeedPin = await markerForCustomer(seeded[0])
+check(
+  'the exact seeded customer is drawn settled at high zoom',
+  !(await firstSeedPin.evaluate((element) => element.classList.contains('pin-unconfirmed')))
+)
 const legendNeeds = await page.locator('button', { hasText: 'Needs a pin' }).count()
 check('the legend shows no "Needs a pin" row for the demo book', legendNeeds === 0)
 
@@ -153,9 +202,12 @@ await page.waitForTimeout(500)
 // behind it and would otherwise swallow the name.
 await page.locator('form input').first().fill('Verifier Test')
 await page.getByPlaceholder('Street, City, State').fill('2115 Dallas Cherryville Hwy, Dallas, NC 28034')
-await page.getByRole('button', { name: 'Find', exact: true }).click()
+await page.getByRole('button', { name: 'Locate', exact: true }).click()
 await page.waitForTimeout(6000)
-console.log('    geocoder said:', (await page.locator('text=Found:').first().innerText().catch(() => 'nothing')))
+console.log(
+  '    geocoder said:',
+  await page.locator('text=/^(Located|Matched):/').first().innerText().catch(() => 'nothing')
+)
 await page.getByRole('button', { name: 'Add customer', exact: true }).click()
 await page.waitForTimeout(4000)
 check('the map tab is showing after the save', await wireMap())
@@ -207,7 +259,7 @@ await page.waitForTimeout(600)
 // The layer control is collapsed until it is hovered, the same as for a mouse.
 await page.locator('.leaflet-control-layers').hover()
 await page.waitForTimeout(400)
-await page.locator('.leaflet-control-layers-selector').nth(1).check()
+await page.locator('.leaflet-control-layers-selector').nth(1).evaluate((input) => input.click())
 await page.waitForTimeout(600)
 const satelliteOn = () =>
   page.evaluate(() => {
@@ -308,8 +360,9 @@ await seed([
   }),
 ])
 check('starts settled: no "Needs a pin" row', (await page.locator('button', { hasText: 'Needs a pin' }).count()) === 0)
+const settledEarlPin = await markerForCustomer(await byName('Earl Whitener'))
 check('starts settled: pin drawn solid', (await hollowCount()) === 0)
-await page.locator('.leaflet-marker-icon').first().click()
+await settledEarlPin.click()
 await page.waitForTimeout(600)
 await page.getByRole('button', { name: 'Edit' }).click()
 await page.waitForTimeout(400)
@@ -396,7 +449,16 @@ await seed([
   person({ id: 'x5', name: 'Real PA', lat: 40.31, lng: -75.13, locationPrecision: 'house' }),
 ])
 const bbox = await customers()
-check('nothing draws for the three junk coordinates', (await markerCount()) === 2, `${await markerCount()} markers`)
+const bboxScale = await scaleSnapshot()
+check(
+  'only the two real coordinates enter the low-zoom scale layer',
+  bboxScale.mode === 'clusters' &&
+    bboxScale.eligible === 2 &&
+    bboxScale.rendered === 2 &&
+    bboxScale.dom === 0 &&
+    bboxScale.domHook === 0,
+  JSON.stringify(bboxScale)
+)
 check(
   'their coordinates are dropped as a pair',
   bbox.slice(0, 3).every((c) => c.lat === null && c.lng === null),
@@ -412,14 +474,29 @@ await seed([
   person({ id: 'i2', name: 'Import Two', lat: 35.35, lng: -81.2, locationPrecision: '' }),
   person({ id: 'i3', name: 'Labelled', lat: 35.36, lng: -81.21, locationPrecision: 'house' }),
 ])
-check('the unlabelled pins draw unconfirmed', (await hollowCount()) === 2, `${await hollowCount()} hollow of ${await markerCount()}`)
+const importOnePin = await markerForCustomer(await byName('Import One'))
+const importOneHollow = await importOnePin.evaluate((element) =>
+  element.classList.contains('pin-unconfirmed')
+)
+const importTwoPin = await markerForCustomer(await byName('Import Two'))
+const importTwoHollow = await importTwoPin.evaluate((element) =>
+  element.classList.contains('pin-unconfirmed')
+)
+const labelledPin = await markerForCustomer(await byName('Labelled'))
+const labelledHollow = await labelledPin.evaluate((element) =>
+  element.classList.contains('pin-unconfirmed')
+)
+check(
+  'the two unlabelled exact pins draw unconfirmed and the labelled pin does not',
+  importOneHollow && importTwoHollow && !labelledHollow
+)
 check('both are on "Needs a pin"', (await page.locator('button', { hasText: 'Needs a pin (2)' }).count()) === 1)
 await page.locator('button', { hasText: 'Needs a pin' }).first().click()
 await page.waitForTimeout(400)
 check('the list says the pin was never checked', (await page.locator('text=Pin never checked').count()) === 2)
 await page.locator('button[aria-label="Close"]').first().click()
 await page.waitForTimeout(300)
-await page.locator('.leaflet-marker-icon').first().click()
+await (await markerForCustomer(await byName('Import One'))).click()
 await page.waitForTimeout(600)
 check('the card says why', (await page.locator('text=Nobody has checked this pin').count()) === 1)
 
@@ -441,7 +518,7 @@ await seed([
     locationConfirmedAt: 1750000000000,
   }),
 ])
-await page.locator('.leaflet-marker-icon').first().click()
+await (await markerForCustomer(await earl())).click()
 await page.waitForTimeout(600)
 await page.getByRole('button', { name: 'Move pin' }).click()
 await page.waitForTimeout(1200)
@@ -457,7 +534,7 @@ check('the pin moved and is stamped manual', movedPin.locationPrecision === 'man
 check('the confirmation offers an undo', (await page.getByRole('button', { name: 'Undo' }).count()) === 1)
 // Inside the ten seconds he opens the card and corrects the address to a house
 // in another state - a real thing that happens when a customer moves.
-await page.locator('.leaflet-marker-icon').first().click()
+await (await markerForCustomer(await earl())).click()
 await page.waitForTimeout(500)
 await page.getByRole('button', { name: 'Edit' }).click()
 await page.waitForTimeout(400)
@@ -481,7 +558,7 @@ check(
 )
 check('he is back on "Needs a pin"', (await page.locator('button', { hasText: 'Needs a pin (1)' }).count()) === 1)
 check('and his pin draws unconfirmed', (await hollowCount()) === 1, `${await hollowCount()} hollow`)
-await page.locator('.leaflet-marker-icon').first().click()
+await (await markerForCustomer(await earl())).click()
 await page.waitForTimeout(600)
 check('the card says the address was edited', (await page.locator('text=Address was edited').count()) === 1)
 check(
@@ -508,7 +585,7 @@ await seed([
     locationConfirmedAt: 1750000000000,
   }),
 ])
-await page.locator('.leaflet-marker-icon').first().click()
+await (await markerForCustomer(await earl())).click()
 await page.waitForTimeout(600)
 await page.getByRole('button', { name: 'Move pin' }).click()
 await page.waitForTimeout(1200)
@@ -558,7 +635,16 @@ await page.evaluate((k) => localStorage.removeItem(k), KEY)
 await page.reload()
 await page.waitForTimeout(2500)
 check('still 70 customers', (await customers()).length === 70)
-check('still 70 pins', (await markerCount()) === 70, `${await markerCount()}`)
+const finalScale = await scaleSnapshot()
+check(
+  'all 70 customers still enter the low-zoom cluster layer without DOM pins',
+  finalScale.mode === 'clusters' &&
+    finalScale.eligible === 70 &&
+    finalScale.rendered === 70 &&
+    finalScale.dom === 0 &&
+    finalScale.domHook === 0,
+  JSON.stringify(finalScale)
+)
 check('still zero needs-a-pin entries', (await page.locator('button', { hasText: 'Needs a pin' }).count()) === 0)
 
 console.log('\npage errors: ' + (errs.length ? '\n  ' + errs.join('\n  ') : 'none'))

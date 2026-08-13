@@ -1,4 +1,4 @@
-import { stampAddressChange } from './location.js'
+import { updateCustomerState as applyLegacyCustomerUpdate } from './model.js'
 
 /**
  * The write funnel for "change one customer", as a pure function of the state.
@@ -26,20 +26,5 @@ import { stampAddressChange } from './location.js'
  * cannot forget it.
  */
 export function updateCustomerState(data, id, patch) {
-  const prev = data.customers.find((c) => c.id === id)
-  const lastPumpedChanged =
-    patch.lastPumped !== undefined && patch.lastPumped !== prev?.lastPumped
-  const cycleChanged =
-    patch.cycleMonths !== undefined && patch.cycleMonths !== prev?.cycleMonths
-  const cycleReset = prev && (lastPumpedChanged || cycleChanged)
-  const finalPatch = stampAddressChange(prev, patch)
-  const keep = (k) => !k.startsWith(`${id}:`)
-  return {
-    ...data,
-    customers: data.customers.map((c) => (c.id === id ? { ...c, ...finalPatch } : c)),
-    sentReminders: cycleReset ? data.sentReminders.filter(keep) : data.sentReminders,
-    sentAt: cycleReset
-      ? Object.fromEntries(Object.entries(data.sentAt).filter(([k]) => keep(k)))
-      : data.sentAt,
-  }
+  return applyLegacyCustomerUpdate(data, id, patch)
 }

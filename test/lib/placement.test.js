@@ -360,7 +360,7 @@ describe('no gesture can reach manualLocationPatch', () => {
     expect(mapTab).not.toMatch(/\bdrag(end|start|ging)?\s*:/)
   })
 
-  it('manualLocationPatch is called only from a save handler', () => {
+  it('manualLocationPatch is called only from the new-customer save handler', () => {
     const lines = mapTab.split('\n')
     const callers = lines
       .map((line, i) => ({ line, i }))
@@ -373,7 +373,22 @@ describe('no gesture can reach manualLocationPatch', () => {
         return '(top level)'
       })
     expect(callers.length).toBeGreaterThan(0)
-    expect([...new Set(callers)].sort()).toEqual(['saveNewCustomer', 'savePlacedPin'])
+    expect([...new Set(callers)].sort()).toEqual(['saveNewCustomer'])
+  })
+
+  it('an existing pin is durably set only from its save handler', () => {
+    const lines = mapTab.split('\n')
+    const callers = lines
+      .map((line, i) => ({ line, i }))
+      .filter(({ line }) => /onSetPin\(/.test(line))
+      .map(({ i }) => {
+        for (let j = i; j >= 0; j--) {
+          const m = lines[j].match(/^\s*(?:async\s+)?function\s+(\w+)/)
+          if (m) return m[1]
+        }
+        return '(top level)'
+      })
+    expect(callers).toEqual(['savePlacedPin'])
   })
 
   // The zoom gate is a lib function, and the browser proof that it is wired to
@@ -393,6 +408,6 @@ describe('no gesture can reach manualLocationPatch', () => {
       mapTab.indexOf('const crosshairPoint')
     )
     expect(body).toContain('setView')
-    expect(body).not.toMatch(/onUpdateCustomer|onAddCustomer|manualLocationPatch/)
+    expect(body).not.toMatch(/onUpdateCustomer|onAddCustomer|onSetPin|onRestorePin|manualLocationPatch/)
   })
 })
