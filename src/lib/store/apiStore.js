@@ -1,5 +1,6 @@
 import { newCustomerId } from '../ids.js'
 import { applyMutation } from '../model.js'
+import { channelForRungKey } from '../reminderView.js'
 import { decodeSyncResponse, emptySnapshot, encodeMutation, mergeSyncDelta } from '../wire.js'
 import { createIdbStorage } from './idb.js'
 import {
@@ -52,7 +53,10 @@ const parseReminderId = (reminderId) => {
   if (split < 1) throw new TypeError('Reminder id must be customerId:key')
   const customerId = reminderId.slice(0, split)
   const reminderKey = reminderId.slice(split + 1)
-  return { customerId, reminderKey, channel: reminderKey === '14' ? 'sms' : 'email' }
+  // See demoStore.js: the channel is derived from the canonical rung key. The
+  // old '14' offset test sent channel 'email' for the 'sms' rung, which the
+  // Worker rejects as a key/channel mismatch.
+  return { customerId, reminderKey, channel: channelForRungKey(reminderKey) }
 }
 
 const UPDATE_FIELDS = new Set([

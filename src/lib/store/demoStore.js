@@ -1,4 +1,5 @@
 import { newCustomerId } from '../ids.js'
+import { channelForRungKey } from '../reminderView.js'
 import { applyMutation, updateCustomerState } from '../model.js'
 import { loadState, saveState } from '../storage.js'
 import { createMutation } from './outbox.js'
@@ -15,7 +16,12 @@ const parseReminderId = (reminderId) => {
   if (split < 1) throw new TypeError('Reminder id must be customerId:key')
   const customerId = reminderId.slice(0, split)
   const reminderKey = reminderId.slice(split + 1)
-  return { customerId, reminderKey, channel: reminderKey === '14' ? 'sms' : 'email' }
+  // The channel comes from the canonical rung key, never from the old day
+  // offsets. Keying on '14' predates the rung keys and sent channel 'email' for
+  // the 'sms' rung, which the Worker rejects outright ("payload reminder key and
+  // channel do not match") - marking a text sent could not succeed on a live
+  // book.
+  return { customerId, reminderKey, channel: channelForRungKey(reminderKey) }
 }
 
 /** The existing pumpcycle-demo-v4 behavior behind the async store contract. */

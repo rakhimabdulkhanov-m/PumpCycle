@@ -5,10 +5,14 @@ function parseISO(s) {
   return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
-function toISO(d) {
+// The calendar date of a local Date, as YYYY-MM-DD. Never toISOString(), which
+// converts to UTC and shifts the date by the host's offset.
+export function toISODate(d) {
   const pad = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
+
+const toISO = toISODate
 
 export function todayISO() {
   return toISO(new Date())

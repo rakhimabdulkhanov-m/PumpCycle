@@ -293,7 +293,12 @@ function App() {
             customers={data.customers}
             sentReminders={data.sentReminders}
             sentAt={data.sentAt}
+            reminderLog={data.reminderLog}
+            settings={data.settings}
             onMarkSent={markReminderSent}
+            onUpdateCustomer={updateCustomer}
+            onMarkPumped={markPumped}
+            onNavigateCustomer={navigateToCustomer}
           />
         )}
       </main>
