@@ -31,31 +31,27 @@ const WRANGLER = path.join(ROOT, 'wrangler.jsonc')
 // The recorded schema version
 // ---------------------------------------------------------------------------
 describe('migrations on disk', () => {
-  it('is 0001 then 0002, in order', () => {
+  it('is 0001 then 0002 then 0003, in order', () => {
     const found = scanMigrations(MIGRATIONS)
-    expect(found.map((m) => m.num)).toEqual([1, 2])
+    expect(found.map((m) => m.num)).toEqual([1, 2, 3])
     expect(found[0].name).toMatch(/^0001_/)
     expect(found[1].name).toMatch(/^0002_/)
+    expect(found[2].name).toMatch(/^0003_/)
   })
 
   /**
-   * This is acceptance criterion 5's "the recorded schema version is 2", as far
-   * as it can be asserted without spawning wrangler (~14s per invocation, and
-   * migrate.mjs makes several).
-   *
    * migrate.mjs records `pending[pending.length - 1].num` and preflight.mjs
-   * expects `highestMigrationNumber`. Both now read this one function, and both
-   * numbers are asserted to be 2, so "the version a migration run writes" and
-   * "the version a deploy demands" cannot drift apart. That the write itself
-   * lands in schema_meta is exercised by running the script for real.
+   * expects `highestMigrationNumber`. Both read this one function, and both
+   * numbers are asserted to be 3, so "the version a migration run writes" and
+   * "the version a deploy demands" cannot drift apart.
    */
-  it('a full run records version 2, and a deploy expects version 2', () => {
+  it('a full run records version 3, and a deploy expects version 3', () => {
     const found = scanMigrations(MIGRATIONS)
     const versionAfterFullRun = found[found.length - 1].num // what migrate.mjs writes
     const versionPreflightExpects = highestMigrationNumber(MIGRATIONS)
 
-    expect(versionAfterFullRun).toBe(2)
-    expect(versionPreflightExpects).toBe(2)
+    expect(versionAfterFullRun).toBe(3)
+    expect(versionPreflightExpects).toBe(3)
     expect(versionAfterFullRun).toBe(versionPreflightExpects)
   })
 

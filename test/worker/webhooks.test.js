@@ -371,3 +371,69 @@ describe('routing', () => {
     expect(response.status).toBe(200)
   })
 })
+
+describe('a soft bounce must not freeze the row', () => {
+  async function addLogRow(customerId, messageId, status) {
+    await db()
+      .prepare(
+        `INSERT INTO reminder_log
+           (id, customer_id, reminder_key, cycle_seq, channel, provider, provider_message_id,
+            to_email, status, attempts, claimed_at, sent_at, seq)
+         VALUES (?, ?, 'pre', 0, 'email', 'resend', ?, 'dale@example.com', ?, 1, 1, 1, ?)`
+      )
+      .bind(`rl-${messageId}`, customerId, messageId, status, ++seq)
+      .run()
+  }
+
+  it('lets a later hard bounce move a row that a soft bounce set to delayed', async () => {
+    // The status update was guarded `AND status = 'sent'`, so a delayed row was
+    // frozen: the later hard bounce could never be recorded, and that failure
+    // never reached the owner's problem mail. A message really can be delayed
+    // and then bounce hours later.
+    const id = await addCustomer('dale@example.com')
+    await addLogRow(id, 'msg-delay-then-bounce', 'sent')
+
+    const delayed = await webhookRequest({
+      type: 'email.delivery_delayed',
+      data: { email_id: 'msg-delay-then-bounce', to: ['dale@example.com'] },
+    })
+    expect((await post(delayed, KEYED, {}, tenant())).status).toBe(200)
+    expect(
+      (await db().prepare('SELECT status FROM reminder_log WHERE provider_message_id = ?')
+        .bind('msg-delay-then-bounce').first()).status
+    ).toBe('delayed')
+
+    const bounced = await webhookRequest({
+      type: 'email.bounced',
+      data: { email_id: 'msg-delay-then-bounce', to: ['dale@example.com'], bounce: { type: 'Permanent' } },
+    })
+    expect((await post(bounced, KEYED, {}, tenant())).status).toBe(200)
+
+    const row = await db()
+      .prepare('SELECT status, reported_at FROM reminder_log WHERE provider_message_id = ?')
+      .bind('msg-delay-then-bounce')
+      .first()
+    expect(row.status).toBe('bounced')
+    // Still unreported, so the next morning's problem mail will name it.
+    expect(row.reported_at).toBe(null)
+  })
+
+  it('does not let a delivery_delayed event walk a terminal bounce backwards', async () => {
+    // The widened guard must still exclude terminal states: a permanent
+    // failure may never be downgraded to a retryable one.
+    const id = await addCustomer('dale@example.com')
+    await addLogRow(id, 'msg-already-bounced', 'bounced')
+
+    const delayed = await webhookRequest({
+      type: 'email.delivery_delayed',
+      data: { email_id: 'msg-already-bounced', to: ['dale@example.com'] },
+    })
+    await post(delayed, KEYED, {}, tenant())
+
+    const row = await db()
+      .prepare('SELECT status FROM reminder_log WHERE provider_message_id = ?')
+      .bind('msg-already-bounced')
+      .first()
+    expect(row.status).toBe('bounced')
+  })
+})

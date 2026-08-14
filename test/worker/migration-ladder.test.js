@@ -71,10 +71,11 @@ describe('migration ladder', () => {
     expect(appliedNames).toHaveLength(env.TEST_MIGRATIONS.length)
   })
 
-  it('applies exactly the files on disk, 0001 then 0002', () => {
+  it('applies exactly the files on disk, 0001 then 0002 then 0003', () => {
     expect(appliedNames[0]).toMatch(/^0001_/)
     expect(appliedNames[1]).toMatch(/^0002_/)
-    expect(appliedNames).toHaveLength(2)
+    expect(appliedNames[2]).toMatch(/^0003_/)
+    expect(appliedNames).toHaveLength(3)
   })
 
   /**

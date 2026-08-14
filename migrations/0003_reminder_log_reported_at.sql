@@ -1,0 +1,26 @@
+-- D1 schema migration 0003 — reminder_log: reported_at
+--
+-- Rules (same as 0001 and 0002): no BEGIN/COMMIT (D1 rejects them in --file mode).
+-- Moments = INTEGER ms epoch UTC.
+--
+-- ONE change: ADD COLUMN reported_at INTEGER to reminder_log.
+--
+-- Nullable, no default, no backfill. A NULL means "the owner has never been
+-- told about this row via a problem-mail digest." Non-null means the digest
+-- sent at that epoch has already reported this row; it will not be included
+-- in a future digest.
+--
+-- This column fixes the fundamental timing problem with the previous approach
+-- (window-based selection): Resend's bounce webhook arrives minutes to hours
+-- after the send pass closes, so a row that reads 'sent' at digest time and
+-- only later gets flipped to 'bounced' was invisible to the window-based query
+-- and then permanently out of scope once the window moved on. With reported_at
+-- the selection rule is "unreported", and a bounce that arrives a day late is
+-- still picked up on the next morning's pass.
+--
+-- No re-run guard: an ALTER TABLE ADD COLUMN applied twice fails loudly with
+-- "duplicate column name: reported_at", which is the right outcome (the same
+-- reason 0002 has no guard statement - see its header). Do not add IF NOT
+-- EXISTS or any conditional wrapper.
+
+ALTER TABLE reminder_log ADD COLUMN reported_at INTEGER;

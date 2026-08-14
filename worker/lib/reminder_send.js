@@ -32,6 +32,7 @@ import { projectCustomer, projectSettings } from './projection.js'
 import { nextSeq } from './seq.js'
 import { hasResendKey, sendEmail } from './resend.js'
 import { overdueEmail, preDueEmail } from './email_templates.js'
+import { sendOwnerDigest, sendOwnerWeekly } from './owner_digest.js'
 import { hourInZone, nextDue, startOfDay, todayISOInZone } from '../../src/lib/dates.js'
 import { PRE_DUE_KEY, overdueReminders, remindersFor } from '../../src/lib/reminders.js'
 
@@ -423,7 +424,13 @@ export async function runTenantReminders(tenant, env, { now = Date.now(), force 
   const capped = retries.length + fresh.length > cap
 
   if (batch.length === 0) {
-    return finish('ok', `nothing due (reaped ${reaped.requeued.length}, abandoned ${reaped.abandoned})`)
+    const r = await finish('ok', `nothing due (reaped ${reaped.requeued.length}, abandoned ${reaped.abandoned})`)
+    // Owner digest and weekly run even when nothing was due today. Any error
+    // inside them is caught and recorded in their own job_runs rows; they never
+    // alter r or the reminders job_runs row.
+    await sendOwnerDigest(db, tenant, env, { now, today, timezone, from })
+    await sendOwnerWeekly(db, tenant, env, { now, today, timezone, from })
+    return r
   }
 
   // Sequence numbers are allocated in one hop before any claim: nextSeq cannot
@@ -502,7 +509,13 @@ export async function runTenantReminders(tenant, env, { now = Date.now(), force 
     .filter(Boolean)
     .join(', ')
 
-  return finish('ok', detail, sent, failed)
+  const r = await finish('ok', detail, sent, failed)
+  // Owner digest and weekly run after the send pass. Any error inside them is
+  // caught and recorded in their own job_runs rows; they never alter r or the
+  // reminders job_runs row.
+  await sendOwnerDigest(db, tenant, env, { now, today, timezone, from })
+  await sendOwnerWeekly(db, tenant, env, { now, today, timezone, from })
+  return r
 }
 
 /**

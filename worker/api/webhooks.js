@@ -197,8 +197,14 @@ export async function post(request, env, ctx, tenant) {
     statements.push(
       db
         .prepare(
+          // 'delayed' is accepted alongside 'sent' because a soft bounce is not
+          // terminal: a message can be delayed and then hard-bounce hours later.
+          // Guarding on 'sent' alone froze such a row at 'delayed' forever, so
+          // the later bounce was never recorded and never reached the owner's
+          // problem mail. The terminal states ('bounced', 'complained') are
+          // still excluded - nothing may walk a permanent failure back.
           `UPDATE reminder_log SET status = ?, error = ?
-            WHERE provider_message_id = ? AND status = 'sent'`
+            WHERE provider_message_id = ? AND status IN ('sent', 'delayed')`
         )
         .bind(logStatus, eventType, messageId)
     )

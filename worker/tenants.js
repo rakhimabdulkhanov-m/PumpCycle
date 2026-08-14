@@ -28,7 +28,9 @@ const DEMO_HOSTS = new Set([
  *     timezone: 'America/New_York',
  *     fromEmail: 'reminders@client-one.example',   // optional
  *     replyTo: 'office@client-one.example',        // optional
- *   }
+ *     ownerEmail: 'owner@client-one.example',      // optional - receives daily problem mail
+ *   }                                              //   and Monday weekly summary; omit to
+ *                                                  //   suppress both
  *
  * Adding a host here requires the matching bindings in wrangler.jsonc and a migrated
  * database, both in the same deploy; scripts/preflight.mjs fails the deploy otherwise.
