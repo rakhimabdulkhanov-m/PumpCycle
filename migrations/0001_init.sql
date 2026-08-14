@@ -197,6 +197,16 @@ CREATE TABLE IF NOT EXISTS settings (
   updated_at INTEGER NOT NULL
 );
 
+-- 'timezone' IS DEAD DATA. NOTHING READS IT. Do not wire it back up.
+--
+-- A tenant's calendar comes from worker/tenants.js (tenantZone): deploy config,
+-- code-reviewed, and validated before a deploy by scripts/deploy_checks.mjs.
+-- This row used to OVERRIDE that value at every read site while being hand-typed
+-- at provisioning and validated by nothing, and one transposed letter in it
+-- ('America/New_Yrok') threw out of the reminder cron before its first job_runs
+-- insert: no mail, no record, no digest, and an app that still looked healthy.
+-- It is left in place rather than dropped because a migration to remove an
+-- unread row is risk for no benefit.
 INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES
   ('company_name',              '',                 0),
   ('timezone',                  'America/New_York',  0),

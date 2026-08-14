@@ -3,6 +3,8 @@
  * translation in this file so endpoint code never grows a second, partial map.
  */
 
+import { isoDateInZone } from '../../src/lib/dates.js'
+
 const value = (row, key, fallback = '') => row[key] ?? fallback
 
 export function projectCustomer(row) {
@@ -106,13 +108,24 @@ export function projectSettings(rows) {
   return projected
 }
 
-export function reminderCompatibility(rows) {
+/**
+ * The manual-send projection the browser reads back as "this one is sent".
+ *
+ * `timeZone` is the tenant's IANA zone and is required, because the Worker's own
+ * clock is UTC: formatting here with toISOString() dated every send after 20:00
+ * Eastern as tomorrow, and this value REPLACES the browser's optimistic one on
+ * the next sync, so the Reminders tab printed tomorrow's date back at the
+ * operator this evening. An unknown zone throws out of Intl rather than quietly
+ * becoming UTC - the same fail-loud policy as src/lib/dates.js.
+ */
+export function reminderCompatibility(rows, timeZone) {
+  const dateInZone = isoDateInZone(timeZone)
   const sentReminders = []
   const sentAt = {}
   for (const row of rows) {
     const id = `${row.customer_id}:${row.reminder_key}`
     sentReminders.push(id)
-    if (row.sent_at != null) sentAt[id] = new Date(row.sent_at).toISOString().slice(0, 10)
+    if (row.sent_at != null) sentAt[id] = dateInZone(row.sent_at)
   }
   return { sentReminders, sentAt }
 }

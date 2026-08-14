@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { env } from 'cloudflare:test'
 import { applyMutation, post } from '../../worker/api/mutations.js'
+import { STALE_CLAIM_MS } from '../../worker/lib/reminder_send.js'
 
 const db = () => env.DB_DEV
 let serial = 0
@@ -32,6 +33,41 @@ async function add(overrides = {}, mutationId) {
   const payload = addPayload(uid('customer'), overrides)
   const response = await applyMutation(db(), envelope('customer.add', payload, mutationId), 2000)
   return { id: payload.id, response }
+}
+
+/**
+ * One reminder_log row, written straight to the table the way the sender and
+ * the Resend webhook leave it. reported_at is stamped on every one of them, so
+ * the re-arm path clearing it on the REPLACEMENT row is visible rather than
+ * indistinguishable from a default.
+ */
+let logSerial = 0
+async function logRow(over = {}) {
+  const id = over.id || `rl-test-${++logSerial}`
+  await db()
+    .prepare(
+      `INSERT INTO reminder_log
+         (id, customer_id, reminder_key, cycle_seq, channel, provider, provider_message_id,
+          to_email, status, attempts, claimed_at, sent_at, error, reported_at, seq)
+       VALUES (?, ?, ?, ?, ?, 'resend', 'resend-msg-1', ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      id,
+      over.customerId,
+      over.key ?? 'pre',
+      over.cycleSeq ?? 0,
+      over.channel ?? 'email',
+      over.toEmail ?? 'earl@oldhost.com',
+      over.status ?? 'bounced',
+      over.attempts ?? 3,
+      over.claimedAt ?? 1000,
+      over.sentAt ?? 1100,
+      over.error ?? 'email.bounced',
+      over.reportedAt ?? 4242,
+      ++logSerial + 500000
+    )
+    .run()
+  return id
 }
 
 const row = (sql, ...bindings) => db().prepare(sql).bind(...bindings).first()
@@ -72,6 +108,227 @@ describe('mutation happy paths and semantics', () => {
     }), 3500)
     expect(await row('SELECT address, address_changed_at FROM customers WHERE id = ?', id))
       .toEqual({ address: '  123   elm st  ', address_changed_at: null })
+  })
+
+  it('re-arms sending when the email address actually changes, and only then', async () => {
+    const bounced = async (overrides) => {
+      const { id } = await add(overrides)
+      await db().prepare(
+        "UPDATE customers SET email_status = 'bounced', soft_bounce_count = 2 WHERE id = ?"
+      ).bind(id).run()
+      return id
+    }
+    const status = (id) => row('SELECT email, email_status, soft_bounce_count FROM customers WHERE id = ?', id)
+
+    // A different address is a different recipient: the suppression was evidence
+    // against the old address, not against the customer.
+    const corrected = await bounced({ email: 'earl@oldhost.com' })
+    await applyMutation(db(), envelope('customer.update', {
+      customerId: corrected, changes: { email: 'earl@newhost.com' },
+    }), 6100)
+    expect(await status(corrected)).toEqual({
+      email: 'earl@newhost.com', email_status: 'ok', soft_bounce_count: 0,
+    })
+
+    // Clearing it leaves no address to be bad.
+    const cleared = await bounced({ email: 'gone@oldhost.com' })
+    await applyMutation(db(), envelope('customer.update', {
+      customerId: cleared, changes: { email: '' },
+    }), 6200)
+    expect(await status(cleared)).toEqual({ email: '', email_status: 'ok', soft_bounce_count: 0 })
+
+    // Re-typing the same address in different case or with stray spaces is not a
+    // correction; re-arming there would mail a genuinely dead address again.
+    const retyped = await bounced({ email: 'earl@oldhost.com' })
+    await applyMutation(db(), envelope('customer.update', {
+      customerId: retyped, changes: { email: '  Earl@OldHost.com ' },
+    }), 6300)
+    expect(await status(retyped)).toEqual({
+      email: '  Earl@OldHost.com ', email_status: 'bounced', soft_bounce_count: 2,
+    })
+
+    // An unrelated edit must not touch deliverability at all.
+    const renamed = await bounced({ email: 'earl@oldhost.com' })
+    await applyMutation(db(), envelope('customer.update', {
+      customerId: renamed, changes: { name: 'Earl Renamed' },
+    }), 6400)
+    expect(await status(renamed)).toEqual({
+      email: 'earl@oldhost.com', email_status: 'bounced', soft_bounce_count: 2,
+    })
+
+    // A COMPLAINT IS PERMANENT BY POLICY. This assertion is deliberately the
+    // reverse of what it used to say. A bounce is evidence against an address;
+    // a spam report is a person telling us to stop, about mail that was
+    // DELIVERED. webhooks.js: "no escalation ladder, no second chance -
+    // continuing to mail someone who reported you is how a sending domain
+    // dies." No edit the operator can make in the app lifts it.
+    const complained = await bounced({ email: 'spam@oldhost.com' })
+    await db().prepare("UPDATE customers SET email_status = 'complained' WHERE id = ?")
+      .bind(complained).run()
+    await applyMutation(db(), envelope('customer.update', {
+      customerId: complained, changes: { email: 'fresh@newhost.com' },
+    }), 6500)
+    expect(await status(complained)).toEqual({
+      email: 'fresh@newhost.com', email_status: 'complained', soft_bounce_count: 2,
+    })
+    const auditRow = await row(
+      "SELECT after_json FROM audit_log WHERE entity_id = ? AND action = 'customer.update'", complained
+    )
+    expect(JSON.parse(auditRow.after_json)).toMatchObject({
+      emailStatus: 'complained', softBounceCount: 2,
+    })
+  })
+
+  it('re-opens this cycle\'s undelivered email so the corrected address actually gets it', async () => {
+    // Clearing email_status is not enough on its own. The bounced reminder_log
+    // row still holds (customer, rung, cycle, channel) in the uniqueness index,
+    // so no fresh claim can ever be won for this cycle, and runTenantReminders
+    // filters recently-'bounced' rungs out of its candidates as well. Without
+    // re-opening the row the operator fixes the address, watches the red warning
+    // disappear, and the customer receives nothing for the rest of the cycle.
+    const { id } = await add({ email: 'earl@oldhost.com' })
+    await db().prepare(
+      "UPDATE customers SET email_status = 'bounced', cycle_seq = 4 WHERE id = ?"
+    ).bind(id).run()
+    const logId = await logRow({ customerId: id, cycleSeq: 4, status: 'bounced', toEmail: 'earl@oldhost.com' })
+
+    const mutationId = uid('rearm')
+    await applyMutation(db(), envelope('customer.update', {
+      customerId: id, changes: { email: 'earl@newhost.com' },
+    }, mutationId), 7100)
+
+    const reminder = await row('SELECT * FROM reminder_log WHERE customer_id = ?', id)
+    expect(reminder).toMatchObject({
+      status: 'sending',   // the reaper's own state: picked up on the next cron pass
+      attempts: 0,         // clears any prior exhaustion, so MAX_ATTEMPTS lets it run
+      to_email: 'earl@newhost.com',
+      error: '',
+      sent_at: null,
+      cycle_seq: 4,
+    })
+    // Stale to the reaper by a whisker, and NOT zero. Zero fell out of the
+    // sender's 30-day repeat guard entirely (which compares COALESCE(sent_at,
+    // claimed_at)), so a cycle_seq bump later the same day let a fresh claim win
+    // alongside this retry and the homeowner got two identical emails.
+    expect(reminder.claimed_at).toBe(7100 - STALE_CLAIM_MS - 1000)
+    // A NEW id, because the id is the Resend Idempotency-Key. Resend honours a
+    // key for 24 hours and answers a reuse carrying a DIFFERENT payload with 409
+    // invalid_idempotent_request - and the payload changed, that being the whole
+    // point. Reusing the id would turn a same-day correction into a hard failure
+    // the owner never hears about.
+    expect(reminder.id).toBe(`${mutationId}:requeue:0`)
+    // reported_at starts NULL. Carrying the old value over meant that if the
+    // re-armed send failed again the new row was 'failed' with reported_at
+    // already set, and owner_digest.js selects on reported_at IS NULL alone -
+    // so that second failure reached nobody, and 'failed' does not touch
+    // email_status either. The house rule is "reported at least once and never
+    // lost", not "exactly once".
+    expect(reminder.reported_at).toBeNull()
+
+    // The bounce itself is not lost with the row. mergeRows in src/lib/wire.js
+    // only drops rows carrying archivedAt, which reminder_log has not, so a
+    // browser that already synced the bounce keeps it while a fresh device
+    // never sees it - and server-side it would be recoverable from nowhere.
+    const audited = await row(
+      "SELECT * FROM audit_log WHERE entity = 'reminder' AND action = 'reminder.requeued'"
+    )
+    expect(audited.entity_id).toBe(logId)
+    expect(JSON.parse(audited.before_json)).toMatchObject({
+      id: logId, status: 'bounced', toEmail: 'earl@oldhost.com', reportedAt: 4242,
+    })
+    expect(JSON.parse(audited.after_json)).toMatchObject({
+      id: `${mutationId}:requeue:0`, status: 'sending', toEmail: 'earl@newhost.com',
+    })
+  })
+
+  it('re-opens only this customer, this cycle, this channel - and only real failures', async () => {
+    const { id } = await add({ email: 'kept@oldhost.com' })
+    const other = await add({ email: 'stranger@oldhost.com' })
+    await db().prepare(
+      "UPDATE customers SET email_status = 'bounced', cycle_seq = 2 WHERE id = ?"
+    ).bind(id).run()
+
+    const untouched = [
+      // A different cycle. Its moment passed with the cycle.
+      ['prior cycle', 'bounced', await logRow({ customerId: id, cycleSeq: 1, status: 'bounced', key: 'pre' })],
+      // A rung that DID reach the customer. Re-opening it would mail a second
+      // copy of something they already have.
+      ['delivered', 'sent', await logRow({ customerId: id, cycleSeq: 2, status: 'sent', key: 'od1' })],
+      // Mid-flight: owned by the reaper, not by this path.
+      ['in flight', 'sending', await logRow({ customerId: id, cycleSeq: 2, status: 'sending', key: 'od2' })],
+      ['sms', 'failed', await logRow({ customerId: id, cycleSeq: 2, status: 'failed', key: 'sms', channel: 'sms' })],
+      ['other customer', 'bounced', await logRow({ customerId: other.id, cycleSeq: 0, status: 'bounced', key: 'pre' })],
+      // A COMPLAINT IS PERMANENT BY POLICY, and this assertion is the reverse of
+      // what it used to say. The mail was delivered and then reported as spam;
+      // re-sending it is how a sending domain dies.
+      ['complaint', 'complained', await logRow({ customerId: id, cycleSeq: 2, status: 'complained', key: 'od3' })],
+    ]
+    // At most ONE row is re-opened - one correction, at most one email. Three
+    // re-opened rungs mailed a homeowner three times in one morning, which is
+    // exactly what dueReminders' one-rung rule exists to prevent. (Which one, of
+    // several failures, is proven end-to-end in reminder_send.test.js.)
+    const reopened = await logRow({ customerId: id, cycleSeq: 2, status: 'failed', key: 'pre' })
+
+    await applyMutation(db(), envelope('customer.update', {
+      customerId: id, changes: { email: 'kept@newhost.com' },
+    }), 7200)
+
+    for (const [label, status, logId] of untouched) {
+      const after = await row('SELECT status FROM reminder_log WHERE id = ?', logId)
+      expect([label, after?.status]).toEqual([label, status])
+    }
+    expect(await row('SELECT id FROM reminder_log WHERE id = ?', reopened)).toBeNull()
+    const requeued = await db().prepare(
+      "SELECT reminder_key FROM reminder_log WHERE customer_id = ? AND status = 'sending' AND attempts = 0"
+    ).bind(id).all()
+    expect(requeued.results.map((r) => r.reminder_key)).toEqual(['pre'])
+  })
+
+  it('blanking the address suppresses without re-opening anything - there is nowhere to send', async () => {
+    const { id } = await add({ email: 'gone@oldhost.com' })
+    await db().prepare("UPDATE customers SET email_status = 'bounced' WHERE id = ?").bind(id).run()
+    const logId = await logRow({ customerId: id, cycleSeq: 0, status: 'bounced', toEmail: 'gone@oldhost.com' })
+
+    await applyMutation(db(), envelope('customer.update', {
+      customerId: id, changes: { email: '   ' },
+    }), 7300)
+
+    expect(await row('SELECT status, to_email FROM reminder_log WHERE id = ?', logId))
+      .toEqual({ status: 'bounced', to_email: 'gone@oldhost.com' })
+  })
+
+  it('re-typing the same dead address re-opens nothing', async () => {
+    const { id } = await add({ email: 'earl@oldhost.com' })
+    await db().prepare("UPDATE customers SET email_status = 'bounced' WHERE id = ?").bind(id).run()
+    const logId = await logRow({ customerId: id, cycleSeq: 0, status: 'bounced' })
+
+    await applyMutation(db(), envelope('customer.update', {
+      customerId: id, changes: { email: '  Earl@OldHost.com ' },
+    }), 7400)
+
+    expect((await row('SELECT status FROM reminder_log WHERE id = ?', logId)).status).toBe('bounced')
+  })
+
+  it('the re-open and the address change are one transaction, or neither happens', async () => {
+    // A requeue that lands without the address change would mail the OLD dead
+    // address; an address change without the requeue is the silent-nothing bug
+    // this whole path exists to close. Same idiom as the customer.add rollback
+    // test above: collide with the deterministic id the batch is about to write.
+    const mutationId = uid('rearm-rollback')
+    const { id } = await add({ email: 'earl@oldhost.com' })
+    const holder = await add()
+    await db().prepare("UPDATE customers SET email_status = 'bounced' WHERE id = ?").bind(id).run()
+    const logId = await logRow({ customerId: id, cycleSeq: 0, status: 'bounced' })
+    await logRow({ customerId: holder.id, cycleSeq: 0, status: 'sent', id: `${mutationId}:requeue:0` })
+
+    await expect(applyMutation(db(), envelope('customer.update', {
+      customerId: id, changes: { email: 'earl@newhost.com' },
+    }, mutationId), 7500)).rejects.toThrow()
+
+    expect(await row('SELECT email, email_status FROM customers WHERE id = ?', id))
+      .toEqual({ email: 'earl@oldhost.com', email_status: 'bounced' })
+    expect((await row('SELECT status FROM reminder_log WHERE id = ?', logId)).status).toBe('bounced')
+    expect(await row('SELECT mutation_id FROM applied_mutations WHERE mutation_id = ?', mutationId)).toBeNull()
   })
 
   it('matches client address stamps and records the stamp in audit output', async () => {

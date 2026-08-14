@@ -1,13 +1,17 @@
 import { json } from '../lib/json.js'
+import { DEFAULT_TIMEZONE, tenantZone } from '../tenants.js'
 
 /**
  * The demo's display configuration. It is a shared, public sales instance with no client
  * behind it, so there is nothing to look up: it is the same on demo.pumpcycle.net, on the
  * apex, on a *.workers.dev preview and on localhost.
+ *
+ * The zone is the product default rather than a second literal, so what this tells the
+ * browser and what the sender mails on cannot drift apart.
  */
 const DEMO_CONFIG = {
   company: 'PumpCycle Demo',
-  timezone: 'America/New_York',
+  timezone: DEFAULT_TIMEZONE,
 }
 
 /**
@@ -46,6 +50,10 @@ export async function get(request, env, ctx, tenant) {
     ok: true,
     mode: tenant.kind === 'live' ? 'live' : 'demo',
     company: config.company || '',
-    timezone: config.timezone || DEMO_CONFIG.timezone,
+    // The same function the reminder sender and the sync projection ask, so what
+    // the app believes the date is and what the mail is scheduled against cannot
+    // drift apart. They used to: this read the tenant config while the sender
+    // preferred a settings row that overrode it.
+    timezone: tenant.kind === 'live' ? tenantZone(tenant) : DEMO_CONFIG.timezone,
   })
 }

@@ -32,12 +32,23 @@ export function todayISO() {
 // run starting at 09:59:59.9 would otherwise read hour 9 here and tomorrow's
 // date a few milliseconds later.
 export function todayISOInZone(timeZone, at = Date.now()) {
-  return new Intl.DateTimeFormat('en-CA', {
+  return isoDateInZone(timeZone)(at)
+}
+
+// The same conversion as a reusable function, for a caller that converts a whole
+// table of moments rather than one. Constructing an Intl.DateTimeFormat costs
+// roughly 0.2ms, which the sync projection pays per reminder row on every poll -
+// about 0.4s of Worker CPU on a 1000-customer book. The formatting itself is
+// defined once, here, so the two cannot drift; an unknown zone still throws,
+// just at construction rather than at the first row.
+export function isoDateInZone(timeZone) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).format(new Date(at))
+  })
+  return (at) => formatter.format(new Date(at))
 }
 
 // The hour (0-23) in a named IANA zone at the given moment.

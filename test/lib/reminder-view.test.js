@@ -7,6 +7,8 @@ import {
   groupSchedule,
   isAutomatedChannel,
   lastSendOf,
+  MARK_SENT_FAILED,
+  markSentOutcome,
   nothingToDoLine,
   repeatWarning,
   sentActivity,
@@ -102,7 +104,10 @@ describe('customersNeedingEmail', () => {
     ])
     expect(rows.map((r) => r.customer.id)).toEqual(['b', 'c', 'a'])
     expect(rows[0].message).toBe('The email came back undeliverable')
-    expect(rows[1].message).toBe('Marked this as spam')
+    // A complaint is permanent by policy: no edit the operator can make in the
+    // app lifts it, so this line has to name the action that does work. Without
+    // it this customer sits in the list forever and he taps Fix every morning.
+    expect(rows[1].message).toBe('Marked your email as spam - call this one instead')
     expect(rows[2].message).toBe('No email address on file')
   })
 
@@ -422,5 +427,34 @@ describe('the schedule agrees with the real sender', () => {
     const view = groupSchedule(book, [], {}, TODAY)
     const named = new Set(customersNeedingEmail(book).map((row) => row.customer.id))
     for (const item of view.blocked) expect(named.has(item.customerId)).toBe(true)
+  })
+})
+
+// The mark-sent write, as a decision the tab can be tested on. Standing in a
+// yard he taps "Mark as sent" once and reads the toast; if the write rejected
+// and the toast still said "Marked sent", he has recorded nothing and believes
+// he has. A queued-offline write is not a rejection - apiStore.enqueue resolves
+// as soon as the mutation is persisted to IndexedDB - so only a real persistence
+// failure reaches the failure branch.
+describe('marking a text sent reports what actually happened', () => {
+  it('claims success only after the write resolves, and keeps the row on failure', async () => {
+    const ok = await markSentOutcome(async () => {}, 'earl:sms', 'Earl Watkins')
+    expect(ok).toEqual({ ok: true, toast: 'Marked sent to Earl Watkins', close: true })
+
+    const failed = await markSentOutcome(
+      async () => { throw new Error('IndexedDB write failed') },
+      'earl:sms',
+      'Earl Watkins'
+    )
+    expect(failed.ok).toBe(false)
+    expect(failed.close).toBe(false)
+    expect(failed.toast).toBe(MARK_SENT_FAILED)
+    expect(failed.toast).not.toMatch(/marked sent/i)
+  })
+
+  it('passes the reminder id through to the write exactly once', async () => {
+    const write = vi.fn(async () => {})
+    await markSentOutcome(write, 'earl:sms', 'Earl Watkins')
+    expect(write.mock.calls).toEqual([['earl:sms']])
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { daysUntilDue, dueStatus, formatDate, nextDue, shiftISO } from '../../src/lib/dates.js'
+import { daysUntilDue, dueStatus, formatDate, isoDateInZone, nextDue, shiftISO, todayISOInZone } from '../../src/lib/dates.js'
 import { remindersFor, remindersForCustomer } from '../../src/lib/reminders.js'
 
 describe('unknown pump dates', () => {
@@ -16,5 +16,21 @@ describe('unknown pump dates', () => {
     expect(shiftISO(null, 1)).toBeNull()
     expect(remindersFor(customer)).toEqual([])
     expect(remindersForCustomer(customer)).toEqual([])
+  })
+})
+
+// The sync projection converts a whole table of send moments per poll, so it
+// reuses one formatter instead of building one per row. Same conversion, one
+// definition - this is what keeps that true.
+describe('zone-dated conversions', () => {
+  it('reuses a formatter without changing the answer, and still refuses a bogus zone', () => {
+    const zone = 'America/New_York'
+    const evening = Date.UTC(2026, 7, 15, 1, 30) // 2026-08-14 21:30 in New York
+    const january = Date.UTC(2026, 0, 15, 1, 30) // still EST, not a fixed offset
+    const dated = isoDateInZone(zone)
+    expect(dated(evening)).toBe('2026-08-14')
+    expect(dated(evening)).toBe(todayISOInZone(zone, evening))
+    expect(dated(january)).toBe(todayISOInZone(zone, january))
+    expect(() => isoDateInZone('Mars/Olympus')).toThrow(RangeError)
   })
 })

@@ -58,6 +58,33 @@ export const LIVE_TENANTS = {
 }
 
 /**
+ * The zone a tenant's mail, dates and hours are computed in when its entry above
+ * names none.
+ *
+ * A TENANT'S CALENDAR COMES FROM DEPLOY CONFIG AND NOWHERE ELSE. It used to be
+ * overridable by a `timezone` row in the client's own D1, hand-typed at
+ * provisioning and validated by nothing, which outranked the entry above at
+ * every read site. One transposed letter there ('America/New_Yrok') threw out of
+ * the reminder cron before it could record anything: no mail, no job_runs row,
+ * no digest, and an app that looked perfectly healthy. A septic company operates
+ * in one place and does not move, so the value belongs in the file that is
+ * code-reviewed and checked before a deploy (scripts/deploy_checks.mjs rejects a
+ * zone ICU does not know), not in a data row nothing validates. The settings row
+ * still exists and is still projected to the browser; nothing reads it.
+ */
+export const DEFAULT_TIMEZONE = 'America/New_York'
+
+/**
+ * The IANA zone for a resolved tenant. The ONE place this question is answered,
+ * so the app (worker/api/bootstrap.js), the sent-history dates
+ * (worker/api/sync.js) and the mail (worker/lib/reminder_send.js) cannot
+ * disagree about what day it is for a client.
+ */
+export function tenantZone(tenant) {
+  return tenant?.config?.timezone || DEFAULT_TIMEZONE
+}
+
+/**
  * The only hostnames on which DEV_TENANT_HOST is honoured. `wrangler dev` serves on these
  * and nothing routable does.
  */

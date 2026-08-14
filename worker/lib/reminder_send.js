@@ -27,7 +27,7 @@
  * actually mailed.
  */
 
-import { LIVE_TENANTS, resolveTenant } from '../tenants.js'
+import { LIVE_TENANTS, resolveTenant, tenantZone } from '../tenants.js'
 import { projectCustomer, projectSettings } from './projection.js'
 import { nextSeq } from './seq.js'
 import { hasResendKey, sendEmail } from './resend.js'
@@ -36,8 +36,15 @@ import { sendOwnerDigest, sendOwnerWeekly } from './owner_digest.js'
 import { hourInZone, nextDue, startOfDay, todayISOInZone } from '../../src/lib/dates.js'
 import { PRE_DUE_KEY, overdueReminders, remindersFor } from '../../src/lib/reminders.js'
 
-/** Rows claimed but not completed within this long are considered abandoned. */
-const STALE_CLAIM_MS = 15 * 60 * 1000
+/**
+ * Rows claimed but not completed within this long are considered abandoned.
+ *
+ * Exported because worker/api/mutations.js has to hand the reaper a row that is
+ * already stale. It stamps `now - STALE_CLAIM_MS - 1000` rather than a bare 0,
+ * so the row is stale AND carries a meaningful recent moment for the repeat
+ * guard below; duplicating the number there is how the two would drift.
+ */
+export const STALE_CLAIM_MS = 15 * 60 * 1000
 
 /** A reminder that has failed this many times stops being retried. */
 const MAX_ATTEMPTS = 3
@@ -54,24 +61,38 @@ const EARLIEST_SEND_HOUR = 8
 const LATEST_SEND_HOUR = 18
 
 /**
- * No customer receives the same rung twice inside this window, whatever the
- * uniqueness index says.
+ * How far a due date is allowed to move and still count as the SAME occasion.
  *
- * The index is (customer_id, reminder_key, cycle_seq, channel), and cycle_seq
- * is NOT a pure cycle counter: an ordinary edit bumps it. Changing a customer's
- * cycle length, or correcting a typo in last_pumped, both increment it and
- * clear the customer's reminders - deliberate behaviour from when reminders
- * were sent by hand and the operator wanted the reset. With an automatic
- * sender that same reset silently frees the key, and a customer already inside
- * the 60-day window receives a second "your tank is due" a day after the first.
- * Measured: two edits an operator makes routinely on a phone each produced a
- * duplicate email.
+ * The uniqueness index is (customer_id, reminder_key, cycle_seq, channel), and
+ * cycle_seq is NOT a pure cycle counter: an ordinary edit bumps it. Changing a
+ * customer's cycle length, or correcting a typo in last_pumped, both increment
+ * it and clear the customer's reminders - deliberate behaviour from when
+ * reminders were sent by hand and the operator wanted the reset. With an
+ * automatic sender that same reset silently frees the key, so something outside
+ * the index has to decide whether the second send is a duplicate.
  *
- * 30 days separates the two cases cleanly. The shortest legitimate gap between
- * two sends of the SAME rung is one full cycle, and the shortest cycle anyone
- * runs is commercial at 90 days. An edit moves a due date by days or weeks.
- * Different rungs are unaffected because the guard is per key: od1 at day 7 and
- * od2 at day 30 are 23 days apart and both go out.
+ * The old rule was "not the same rung twice within 30 days of NOW", and it was
+ * wrong in a way that mailed homeowners twice. A rung's guard has to be at least
+ * as wide as that rung's own eligibility window, and every window here is wider
+ * than 30 days: residential pre-due is 60 days, od2 is the newest earned rung
+ * from +30 to +89, and od3 is the newest earned rung forever after +90. So a
+ * cycle_seq bump anywhere inside a window re-opened that rung as soon as 30 days
+ * had passed, and the customer was told a second time about a pumping date one
+ * day different from the first. Measured over 150 simulated days: one edit, two
+ * emails.
+ *
+ * So the guard is anchored to the RUNG'S OWN WINDOW instead of to the clock:
+ * a rung is suppressed when it already went out at or after that window's
+ * opening day, less this allowance. What the allowance buys is drift - an edit
+ * moves a due date, and with it the window, by days or weeks, and a send made
+ * for the pre-edit window must still suppress the post-edit one. A genuinely new
+ * occasion moves the window by a whole cycle (90 days at the shortest), which is
+ * far outside it.
+ *
+ * Because a candidate's window is by definition already open today, this bound
+ * is never later than `now - 30 days`: the old 30-day rule survives inside the
+ * new one as a floor. Different rungs remain unaffected, since the guard is
+ * still per (customer, rung).
  */
 const REPEAT_SUPPRESSION_MS = 30 * 24 * 60 * 60 * 1000
 
@@ -152,6 +173,32 @@ export async function reapStaleClaims(db, now) {
 }
 
 /**
+ * The pre-due window, and the ONE definition of it.
+ *
+ * The window opens on the send date - 60 days out residential, 15 commercial -
+ * and closes when the customer becomes overdue, past which the overdue ladder
+ * owns them. `remindersFor` is the same function the Reminders tab renders, so
+ * what is mailed and what is displayed cannot disagree. `startOfDay` parses the
+ * same way `parseISO` does, so these compare as whole local days rather than
+ * drifting by the host's UTC offset.
+ *
+ * Both the fresh pass and the retry path ask this question, and they must get
+ * the same answer, so they ask it here - and so does the repeat guard, which
+ * needs the day the window OPENED and must not derive it a second way.
+ *
+ * @returns {{dueDate: Date, opensAt: Date}|null} null unless the window is open
+ *   on `today`.
+ */
+function preDueWindow(customer, today) {
+  const preDue = remindersFor(customer).find((r) => r.channel === 'Email')
+  if (!preDue) return null
+  const dueDate = nextDue(customer)
+  const start = startOfDay(today)
+  if (preDue.sendDate > start || dueDate < start) return null
+  return { dueDate, opensAt: preDue.sendDate }
+}
+
+/**
  * Turn a requeued reminder_log row back into a sendable item.
  *
  * This is what makes the reaper mean anything. Requeuing only re-stamps the
@@ -169,12 +216,21 @@ export async function reapStaleClaims(db, now) {
  */
 function itemFromLogRow(row, customer, today) {
   if (row.reminder_key === PRE_DUE_KEY) {
+    // Re-derive the window from today, exactly as the overdue branch below
+    // re-derives its rung. A pre-due retry rebuilt unconditionally announced a
+    // due date that had already passed: the row was claimed while the window was
+    // open, the send failed, the address was corrected months later, and the
+    // customer was mailed "your tank is due on Jan 10" in June. Same rule as
+    // dueReminders, from the same function, so the two cannot disagree.
+    const window = preDueWindow(customer, today)
+    if (!window) return null
     return {
       customer,
       key: row.reminder_key,
       cycleSeq: row.cycle_seq,
       kind: 'pre',
-      dueDate: nextDue(customer),
+      dueDate: window.dueDate,
+      windowOpensAt: window.opensAt.getTime(),
       daysPastDue: 0,
       logId: row.id,
     }
@@ -192,6 +248,7 @@ function itemFromLogRow(row, customer, today) {
     kind: 'overdue',
     rung: row.reminder_key,
     dueDate: rung.dueDate,
+    windowOpensAt: rung.sendDate.getTime(),
     daysPastDue: rung.daysPastDue,
     logId: row.id,
   }
@@ -199,6 +256,11 @@ function itemFromLogRow(row, customer, today) {
 
 /**
  * Every reminder that has come due for this book today, before deduplication.
+ *
+ * Every item carries `windowOpensAt`, the moment its own rung became eligible:
+ * the pre-due lead day, or the overdue rung's send date. The repeat guard needs
+ * it (see REPEAT_SUPPRESSION_MS) and it comes from the same two functions that
+ * decide eligibility, so the guard cannot disagree with the decision it guards.
  *
  * Deduplication is deliberately NOT done here. Only the database can settle
  * "has this already gone out" atomically against a concurrent invocation, and
@@ -216,26 +278,18 @@ export function dueReminders(customers, today, { overdueEnabled }) {
     const cycleSeq = customer.cycleSeq || 0
 
     // Pre-due: the one email rung per cycle, 60 days out residential / 15
-    // commercial. remindersFor is the same function the Reminders tab renders,
-    // so what is mailed and what is displayed cannot disagree.
-    const preDue = remindersFor(customer).find((r) => r.channel === 'Email')
-    if (preDue) {
-      const dueDate = nextDue(customer)
-      // startOfDay parses the same way parseISO does, so these compare as whole
-      // local days rather than drifting by the host's UTC offset.
-      const start = startOfDay(today)
-      // The window opens on the send date and closes when the customer becomes
-      // overdue - past that point the overdue ladder owns them.
-      if (preDue.sendDate <= start && dueDate >= start) {
-        due.push({
-          customer,
-          key: PRE_DUE_KEY,
-          cycleSeq,
-          kind: 'pre',
-          dueDate,
-          daysPastDue: 0,
-        })
-      }
+    // commercial. See preDueWindow - the retry path asks the same function.
+    const window = preDueWindow(customer, today)
+    if (window) {
+      due.push({
+        customer,
+        key: PRE_DUE_KEY,
+        cycleSeq,
+        kind: 'pre',
+        dueDate: window.dueDate,
+        windowOpensAt: window.opensAt.getTime(),
+        daysPastDue: 0,
+      })
     }
 
     if (!overdueEnabled) continue
@@ -255,6 +309,7 @@ export function dueReminders(customers, today, { overdueEnabled }) {
         kind: 'overdue',
         rung: latest.key,
         dueDate: latest.dueDate,
+        windowOpensAt: latest.sendDate.getTime(),
         daysPastDue: latest.daysPastDue,
       })
     }
@@ -311,7 +366,11 @@ function renderMessage(item, companyName) {
 export async function runTenantReminders(tenant, env, { now = Date.now(), force = false } = {}) {
   const db = tenant.db
   const settings = await readSettings(db)
-  const timezone = settings.timezone || tenant.config?.timezone || 'America/New_York'
+  // Deploy config, never the settings row - see tenantZone. Read before the
+  // first job_runs insert, and a zone ICU rejects still throws here; that is
+  // now reachable only from a code-reviewed file the deploy check validates,
+  // rather than from one hand-typed provisioning statement.
+  const timezone = tenantZone(tenant)
   const startedAt = now
   const jobId = newId('job')
 
@@ -396,23 +455,70 @@ export async function runTenantReminders(tenant, env, { now = Date.now(), force 
     })
     .filter(Boolean)
 
-  // Rungs already sent recently, whatever cycle_seq they were recorded under.
-  // See REPEAT_SUPPRESSION_MS: this is what stops an ordinary customer edit
-  // from re-opening a reminder the customer has already received.
+  // One customer, one email per morning. dueReminders already guarantees it for
+  // the fresh pass - the pre-due window closes the day the overdue ladder opens,
+  // and only the newest earned rung goes out, because "mailing three at once is
+  // how a reminder becomes a complaint". A retry bypasses that count, so a
+  // customer owed a retry gets the retry and nothing else today; the rung
+  // dropped here is not lost, it is simply still earned tomorrow.
+  const owedRetry = new Set(retries.map((item) => item.customer.id))
+
+  // What the calendar says is owed today. A pure decision, no database, so it
+  // can be made before the guard query and tell that query how far back to look.
+  const earned = dueReminders(customers, today, {
+    overdueEnabled: Boolean(settings.overdueRemindersEnabled),
+  })
+
+  // When each rung already went out, whatever cycle_seq it was recorded under.
+  // See REPEAT_SUPPRESSION_MS: this is what stops an ordinary customer edit from
+  // re-opening a reminder the customer has already received.
+  //
+  // The lookback is the oldest window any of today's candidates is standing in,
+  // less the drift allowance - not a fixed 30 days, which was shorter than the
+  // windows it was guarding and therefore let a bumped cycle_seq produce a
+  // duplicate the moment it lapsed. Derived from the candidates rather than
+  // fixed at some generous constant because od3's window has no far end at all:
+  // a customer years overdue would outlive any constant.
+  //
+  // 'sending' rows count, on COALESCE(sent_at, claimed_at). A row in flight has
+  // no sent_at at all, so on sent_at alone it fell out of the guard entirely -
+  // and an in-flight rung is precisely one that is about to become a send. That
+  // is what let a corrected address and a same-afternoon cycle_seq bump produce
+  // two emails: the re-opened row retried at the old cycle_seq while a fresh
+  // claim won at the new one, two log ids, two Resend idempotency keys, two
+  // emails. Widening this cannot suppress an ordinary send in the same run,
+  // because this map is computed BEFORE any claim in this run is made; the only
+  // 'sending' rows it can see belong to an earlier run, and those are retries
+  // (which are never filtered by it) or rows this run has no business
+  // duplicating.
+  const lookback = earned.reduce(
+    (oldest, item) => Math.min(oldest, item.windowOpensAt - REPEAT_SUPPRESSION_MS),
+    now - REPEAT_SUPPRESSION_MS
+  )
   const recentRows = await db
     .prepare(
-      `SELECT customer_id, reminder_key FROM reminder_log
-        WHERE channel = 'email' AND status IN ('sent','bounced','complained') AND sent_at >= ?`
+      `SELECT customer_id, reminder_key, MAX(COALESCE(sent_at, claimed_at)) AS last_at
+         FROM reminder_log
+        WHERE channel = 'email' AND status IN ('sent','bounced','complained','sending')
+          AND COALESCE(sent_at, claimed_at) >= ?
+        GROUP BY customer_id, reminder_key`
     )
-    .bind(now - REPEAT_SUPPRESSION_MS)
+    .bind(lookback)
     .all()
-  const recentlySent = new Set(
-    (recentRows.results || []).map((row) => `${row.customer_id}:${row.reminder_key}`)
+  const lastSentAt = new Map(
+    (recentRows.results || []).map((row) => [`${row.customer_id}:${row.reminder_key}`, row.last_at])
   )
 
-  const candidates = dueReminders(customers, today, {
-    overdueEnabled: Boolean(settings.overdueRemindersEnabled),
-  }).filter((item) => !recentlySent.has(`${item.customer.id}:${item.key}`))
+  const candidates = earned.filter((item) => {
+    if (owedRetry.has(item.customer.id)) return false
+    const last = lastSentAt.get(`${item.customer.id}:${item.key}`)
+    if (last == null) return true
+    // Suppressed if this rung already went out for this occasion: at or after
+    // the day its window opened, less the drift an edit can move that day by.
+    // The window is open today, so this bound is never later than
+    // `now - REPEAT_SUPPRESSION_MS` - the old 30-day rule is the floor.
+    return last < item.windowOpensAt - REPEAT_SUPPRESSION_MS
+  })
 
   const cap = Number.isFinite(settings.maxSendsPerRun) && settings.maxSendsPerRun > 0
     ? settings.maxSendsPerRun

@@ -58,9 +58,17 @@ export function whoSends(channel) {
 // Customers the engine can never reach
 // ---------------------------------------------------------------------------
 
+/**
+ * The complaint line names a DIFFERENT action from the other three, because it
+ * is the only one no edit in this app can clear. A spam report is permanent by
+ * policy (worker/api/webhooks.js, and worker/api/mutations.js refuses to re-arm
+ * it), so correcting the address does nothing and this customer would otherwise
+ * sit in the list forever with a Fix button that leads nowhere. Telling him to
+ * pick up the phone is the only honest instruction.
+ */
 export const ADDRESS_PROBLEMS = Object.freeze({
   bounced: 'The email came back undeliverable',
-  complained: 'Marked this as spam',
+  complained: 'Marked your email as spam - call this one instead',
   missing: 'No email address on file',
   unreachable: 'Emails to this address are not getting through',
 })
@@ -408,6 +416,38 @@ export function repeatWarning(customerId, reminderKey, data = {}, now = Date.now
   if (now - at > REPEAT_WINDOW_DAYS * DAY) return null
   if (at > now) return null
   return { at, on: formatDate(new Date(at)) }
+}
+
+// ---------------------------------------------------------------------------
+// Marking a text sent
+// ---------------------------------------------------------------------------
+
+export const MARK_SENT_FAILED = 'Could not save that. Check your connection and try again.'
+
+/**
+ * Run the mark-sent write and report what the tab should show.
+ *
+ * The one function here that is not a pure function of the snapshot. It exists
+ * as a function at all because the repo has no DOM test runner, and "the toast
+ * only claims success after the write actually resolved" is the whole point of
+ * it: the tab used to fire "Marked sent to Earl" without awaiting or catching,
+ * so a failed IndexedDB write left him standing in a yard believing he had
+ * recorded something he had not.
+ *
+ * A write that is merely QUEUED is a success, not a failure: apiStore.enqueue
+ * resolves as soon as the mutation is persisted to the outbox, which is exactly
+ * how this app is meant to behave with no signal in a yard. Only a real
+ * rejection - the persistence itself failing - reaches the failure branch.
+ */
+export async function markSentOutcome(write, reminderId, customerName) {
+  try {
+    await write(reminderId)
+    return { ok: true, toast: `Marked sent to ${customerName}`, close: true }
+  } catch {
+    // The panel stays open and the row stays where it is: the reminder has not
+    // been recorded, so it must still look unsent.
+    return { ok: false, toast: MARK_SENT_FAILED, close: false }
+  }
 }
 
 // ---------------------------------------------------------------------------

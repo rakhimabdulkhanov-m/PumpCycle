@@ -13,6 +13,8 @@ import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isSanePoint } from '../src/lib/point.js'
+import { PRE_DUE_KEY, SMS_KEY } from '../src/lib/reminders.js'
+import { channelForRungKey } from '../src/lib/reminderView.js'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const SEED = JSON.parse(readFileSync(resolve(ROOT, 'src/data/seed.json'), 'utf8'))
@@ -20,6 +22,30 @@ const STORAGE_KEY = 'pumpcycle-demo-v4'
 const PRECISIONS = new Set(['', 'house', 'house_approx', 'road', 'locality', 'manual'])
 const LIVE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/
 const DAY_MS = 86_400_000
+
+/**
+ * Every rung key a manual-send projection can hold, mapped onto the canonical
+ * key the live app writes today (src/lib/reminders.js).
+ *
+ * A book exported before the rungs were re-keyed carries the day offsets: '60'
+ * and '15' are the residential and commercial lead times of the ONE pre-due
+ * email rung, and '14' is the text rung. A book exported by the current app
+ * already carries 'pre'/'sms'. This program has to accept both, because it is
+ * the path that carries a paying client's book during setup week and the client
+ * may have been running either build.
+ *
+ * The overdue rungs (od1/od2/od3) are deliberately absent: they are sent by the
+ * Worker and recorded directly in reminder_log, so they never appear in the
+ * localStorage manual-send projection. An id keyed with one is a corrupt export
+ * and is refused rather than guessed at.
+ */
+const CANONICAL_RUNG_KEYS = new Map([
+  ['60', PRE_DUE_KEY],
+  ['15', PRE_DUE_KEY],
+  ['14', SMS_KEY],
+  [PRE_DUE_KEY, PRE_DUE_KEY],
+  [SMS_KEY, SMS_KEY],
+])
 
 export class InputError extends Error {}
 
@@ -234,31 +260,63 @@ export function normalizeExport(parsed, { tenantId, sourceHash }) {
   }
   const byId = new Map(customers.map((customer) => [customer.id, customer]))
   const seenReminderIds = new Set()
-  const reminders = (state.sentReminders || []).map((compatibilityId) => {
+  // Keyed by the NORMALISED compatibility id, so two key generations for the
+  // same rung meet here rather than on the database's uniqueness index.
+  // Each entry keeps the exported day beside the row so a collision can be
+  // described in the flag without converting the moment back to a date.
+  const byCanonicalId = new Map()
+  for (const compatibilityId of state.sentReminders || []) {
     if (typeof compatibilityId !== 'string' || seenReminderIds.has(compatibilityId)) {
       throw new InputError(`Invalid or duplicate sent reminder id: ${String(compatibilityId)}`)
     }
     seenReminderIds.add(compatibilityId)
     const split = compatibilityId.lastIndexOf(':')
     const customerId = compatibilityId.slice(0, split)
-    const reminderKey = compatibilityId.slice(split + 1)
+    const reminderKey = CANONICAL_RUNG_KEYS.get(compatibilityId.slice(split + 1))
     const customer = byId.get(customerId)
-    if (!customer || !['60', '15', '14'].includes(reminderKey)) {
+    if (!customer || !reminderKey) {
       throw new InputError(`Sent reminder does not match an imported customer/key: ${compatibilityId}`)
     }
     const sentDay = requireDay(state.sentAt?.[compatibilityId], `sentAt.${compatibilityId}`, { nullable: true }) || baseDate
     if (!state.sentAt?.[compatibilityId]) {
       flags.push({ customerId, field: `sentAt.${reminderKey}`, kind: 'missing_sent_at', message: `Manual reminder ${reminderKey} had no sent date; the export base date was used.` })
     }
-    return {
-      id: `reminder-${sha256(`${tenantId}\0${compatibilityId}`).slice(0, 32)}`,
+    // The row id is hashed from the NORMALISED id rather than the id as
+    // exported, so one send is one row whichever generation of key the book was
+    // written with: re-importing the same book after the client re-exports it
+    // from the current app converges instead of writing a second row.
+    const canonicalId = `${customerId}:${reminderKey}`
+    // channelForRungKey is the canonical definition (src/lib/reminderView.js).
+    const channel = channelForRungKey(reminderKey)
+    const reminder = {
+      id: `reminder-${sha256(`${tenantId}\0${canonicalId}`).slice(0, 32)}`,
       customerId,
       reminderKey,
-      channel: reminderKey === '14' ? 'sms' : 'email',
-      toEmail: reminderKey === '14' ? '' : customer.email,
+      channel,
+      toEmail: channel === 'sms' ? '' : customer.email,
       sentAt: Date.parse(`${sentDay}T12:00:00.000Z`),
     }
-  })
+    const entry = { reminder, sentDay }
+    const existing = byCanonicalId.get(canonicalId)
+    if (!existing) {
+      byCanonicalId.set(canonicalId, entry)
+      continue
+    }
+    // A book holding both `c1:60` and `c1:pre` normalises to one row, and the
+    // duplicate would violate uq_reminder_log_send and fail the whole import.
+    // Keep the newer send - it is the one the customer actually received last -
+    // and flag the drop so it lands in the review printout instead of vanishing.
+    const kept = entry.reminder.sentAt > existing.reminder.sentAt ? entry : existing
+    const dropped = kept === entry ? existing : entry
+    byCanonicalId.set(canonicalId, kept)
+    flags.push({
+      customerId,
+      field: `sentReminders.${reminderKey}`,
+      kind: 'duplicate_reminder_key',
+      message: `Two sent reminders normalised onto the ${reminderKey} rung; kept the ${kept.sentDay} send and dropped the duplicate dated ${dropped.sentDay}.`,
+    })
+  }
+  const reminders = [...byCanonicalId.values()].map((entry) => entry.reminder)
   return { tenantId, sourceHash, baseDate, importAt, runId, customers, visits, reminders, flags, avgJobPriceCents }
 }
 

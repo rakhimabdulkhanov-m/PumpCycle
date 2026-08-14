@@ -7,6 +7,8 @@ import {
   runReminderCron,
   runTenantReminders,
 } from '../../worker/lib/reminder_send.js'
+import { applyMutation } from '../../worker/api/mutations.js'
+import { hourInZone, shiftISO } from '../../src/lib/dates.js'
 
 // Real workerd, real Miniflare D1, migrations applied. Resend is stubbed at the
 // HTTP boundary - globalThis.fetch - and nowhere else. Stubbing our own send
@@ -115,6 +117,71 @@ const KEYED = { ...env, RESEND_API_KEY: 'test-key' }
 /** A moment that is 09:00 in New York: 13:00 UTC in August (EDT). */
 const NINE_AM_ET = Date.parse('2026-06-15T13:00:00Z')
 
+/**
+ * 09:00 Eastern on a given local date, correct on both sides of a DST change.
+ *
+ * A multi-month sweep at a fixed UTC offset would drift to 08:00 local in
+ * November and every run after that would be recorded as "not the send hour" -
+ * a green test that stopped exercising the sender halfway through.
+ */
+function nineAmETOn(isoDate) {
+  const at = Date.parse(`${isoDate}T13:00:00Z`)
+  return at + (9 - hourInZone('America/New_York', at)) * 60 * 60 * 1000
+}
+
+/**
+ * Pin the sent_at of the rows a run just wrote to the SIMULATED moment.
+ *
+ * The sender stamps sent_at = Date.now(), the real wall clock, while these tests
+ * drive `now` months away from it. Without this the repeat guard would be
+ * comparing a real 2026-08 timestamp against a simulated 2026-11 clock, and the
+ * same test would prove something different every week of real time. The rows a
+ * run just wrote are exactly the ones whose sent_at is within ten minutes of the
+ * real clock; in production the two clocks are the same clock.
+ */
+async function pinSends(simulatedNow) {
+  await db()
+    .prepare("UPDATE reminder_log SET sent_at = ? WHERE status = 'sent' AND ABS(sent_at - ?) < 600000")
+    .bind(simulatedNow, Date.now())
+    .run()
+}
+
+/** How many emails each recipient actually received, by address. */
+function sentCounts() {
+  const counts = {}
+  for (const request of sentRequests) {
+    counts[request.body.to] = (counts[request.body.to] || 0) + 1
+  }
+  return counts
+}
+
+let logSeq = 500
+async function logRow(over = {}) {
+  const id = over.id || uid('rl')
+  await db()
+    .prepare(
+      `INSERT INTO reminder_log
+         (id, customer_id, reminder_key, cycle_seq, channel, provider, to_email,
+          status, attempts, claimed_at, sent_at, error, reported_at, seq)
+       VALUES (?, ?, ?, ?, 'email', 'resend', ?, ?, ?, ?, ?, '', ?, ?)`
+    )
+    .bind(
+      id,
+      over.customerId,
+      over.key ?? 'pre',
+      over.cycleSeq ?? 0,
+      over.toEmail ?? 'earl@oldhost.com',
+      over.status ?? 'bounced',
+      over.attempts ?? 1,
+      over.claimedAt ?? NINE_AM_ET,
+      over.sentAt ?? null,
+      over.reportedAt ?? null,
+      ++logSeq
+    )
+    .run()
+  return id
+}
+
 async function reminderRows() {
   const { results } = await db()
     .prepare('SELECT * FROM reminder_log ORDER BY seq')
@@ -129,16 +196,19 @@ async function jobRows() {
 
 beforeEach(async () => {
   sentRequests = []
-  // Order matters: reminder_log references customers.
+  // Order matters: reminder_log and visits both reference customers.
   await db().prepare('DELETE FROM reminder_log').run()
   await db().prepare('DELETE FROM job_runs').run()
+  await db().prepare('DELETE FROM visits').run()
   await db().prepare('DELETE FROM customers').run()
   await setSettings({
     email_enabled: '1',
     overdue_reminders_enabled: '0',
     reminder_send_hour: '9',
     max_sends_per_run: '50',
-    timezone: 'America/New_York',
+    // Deliberately NOT the tenant zone: nothing reads this row any more, and
+    // leaving a wrong value in it is how the suite proves that.
+    timezone: 'Mars/Olympus_Mons',
     company_name: 'Whitaker Septic',
     from_name: '',
     reply_to: '',
@@ -180,13 +250,12 @@ describe('the send-hour gate and the clamp', () => {
     const east = await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET })
     expect(east.sent).toBe(1)
 
-    // The settings row is the client's own configuration and outranks the
-    // deploy-time tenant config, so move it there.
+    // The zone is deploy config and only deploy config, so a west-coast book is
+    // a different tenant entry - not a different row in the same database.
     await db().prepare('DELETE FROM reminder_log').run()
     sentRequests = []
-    await setSettings({ timezone: 'America/Los_Angeles' })
 
-    const west = await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET })
+    const west = await runTenantReminders(tenant({ timezone: 'America/Los_Angeles' }), KEYED, { now: NINE_AM_ET })
     expect(west.status).toBe('skipped')
     expect(west.detail).toContain('America/Los_Angeles')
     expect(sentRequests).toHaveLength(0)
@@ -786,5 +855,401 @@ describe('claimReminder', () => {
     const second = await claimReminder(db(), item, NINE_AM_ET, 2)
     expect(first).toBeTruthy()
     expect(second).toBeNull()
+  })
+})
+
+describe('correcting a bounced address resumes mail for the same cycle', () => {
+  // The end-to-end proof, because every individual piece of this looked correct
+  // while the whole chain did nothing: clearing email_status alone leaves the
+  // bounced row holding (customer, rung, cycle, channel) in the uniqueness
+  // index, so no fresh claim can ever be won and the customer silently receives
+  // nothing for the rest of the cycle - while the Reminders tab shows the
+  // warning cleared. Real workerd, real D1, real mutation path, real cron.
+  it('sends to the new address, exactly once, on the next run', async () => {
+    // due 2026-08-01, so the pre-due window opened 2026-06-02 and is open now.
+    const id = await addCustomer({ email: 'earl@oldhost.com', lastPumped: '2023-08-01' })
+
+    const first = await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET })
+    expect(first.sent).toBe(1)
+    expect(sentRequests[0].body.to).toBe('earl@oldhost.com')
+
+    // What the Resend webhook does on a hard bounce.
+    await db().prepare("UPDATE reminder_log SET status = 'bounced' WHERE customer_id = ?").bind(id).run()
+    await db().prepare("UPDATE customers SET email_status = 'bounced' WHERE id = ?").bind(id).run()
+    sentRequests = []
+
+    // Nothing more can happen for this customer while the address is dead.
+    await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET })
+    expect(sentRequests).toHaveLength(0)
+
+    // He opens the tab, taps Fix, and types the address correctly.
+    await applyMutation(
+      db(),
+      { mutationId: uid('fix'), type: 'customer.update', createdAt: NINE_AM_ET,
+        payload: { customerId: id, changes: { email: 'earl@newhost.com' } } },
+      NINE_AM_ET
+    )
+
+    const after = await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET + 60_000 })
+    expect(after.sent).toBe(1)
+    expect(sentRequests).toHaveLength(1)
+    expect(sentRequests[0].body.to).toBe('earl@newhost.com')
+
+    // One rung, one row, and it is the send that reached him.
+    const rows = await reminderRows()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].status).toBe('sent')
+    expect(rows[0].to_email).toBe('earl@newhost.com')
+
+    // And it does not send a third time the following morning.
+    sentRequests = []
+    await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET + 86_400_000 })
+    expect(sentRequests).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The three scenarios a refuting verifier reproduced against the re-arm path.
+// Each of these sent duplicate mail to a homeowner on the previous tree. They
+// assert on the ACTUAL Resend requests - count, recipient, subject - because
+// every intermediate state in those runs looked correct.
+// ---------------------------------------------------------------------------
+
+const DAY_MS = 86_400_000
+
+describe('a correction is a correction, not a mailshot', () => {
+  it('MULTI-RUNG: re-opens one rung and sends one email, not four', async () => {
+    // Three bounced rows in one cycle is the DESIGNED path, not a corrupt
+    // fixture: webhooks.js only flips email_status on the THIRD soft bounce, so
+    // pre, od1 and od2 all bounced while the customer was still 'ok'.
+    await setSettings({ overdue_reminders_enabled: '1' })
+    // due 2026-01-10; today is 2026-06-15, so od1/od2/od3 have all been earned.
+    const id = await addCustomer({ email: 'earl@oldhost.com', lastPumped: '2023-01-10' })
+    for (const [index, key] of ['pre', 'od1', 'od2'].entries()) {
+      await logRow({
+        customerId: id,
+        key,
+        cycleSeq: 0,
+        status: 'bounced',
+        sentAt: NINE_AM_ET - (3 - index) * DAY_MS,
+      })
+    }
+    await db().prepare("UPDATE customers SET email_status = 'bounced' WHERE id = ?").bind(id).run()
+    sentRequests = []
+
+    await applyMutation(
+      db(),
+      { mutationId: uid('fix'), type: 'customer.update', createdAt: NINE_AM_ET,
+        payload: { customerId: id, changes: { email: 'earl@newhost.com' } } },
+      NINE_AM_ET
+    )
+
+    await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET + 60_000 })
+
+    // One email, to the corrected address, and it is the newest rung that
+    // failed - not pre (whose window closed in January) and not a second copy
+    // of anything.
+    expect(sentRequests.map((r) => r.body.to)).toEqual(['earl@newhost.com'])
+    expect(sentRequests.map((r) => r.body.subject)).toEqual([
+      'Your septic tank is still due for pumping',
+    ])
+  })
+
+  it('PRE-RETRY: never announces a due date that has already passed', async () => {
+    // due 2026-01-10, five months before today: the pre-due window closed the
+    // day this customer went overdue. Rebuilding the retry unconditionally
+    // mailed "due for pumping on Jan 10, 2026" on June 15.
+    const stale = await addCustomer({ lastPumped: '2023-01-10' })
+    await logRow({
+      customerId: stale,
+      key: 'pre',
+      status: 'sending',
+      claimedAt: NINE_AM_ET - 20 * 60 * 1000,
+      toEmail: 'dale@example.com',
+    })
+
+    const result = await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET })
+    expect(sentRequests).toHaveLength(0)
+    expect(result.sent).toBe(0)
+
+    // The control: a pre retry whose window IS still open still goes out, so
+    // this is a closed window and not a disabled retry path. due 2026-08-14.
+    const live = await addCustomer({ lastPumped: '2023-08-14', email: 'live@example.com' })
+    await logRow({
+      customerId: live,
+      key: 'pre',
+      status: 'sending',
+      claimedAt: NINE_AM_ET - 20 * 60 * 1000,
+      toEmail: 'live@example.com',
+    })
+    await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET + 60_000 })
+    expect(sentRequests.map((r) => r.body.to)).toEqual(['live@example.com'])
+  })
+
+  it('REARM: a cycle_seq bump the same afternoon does not produce a second email', async () => {
+    // He corrects a bounced address, then the same afternoon corrects a
+    // last_pumped typo, which bumps cycle_seq. The re-opened row was retried at
+    // the OLD cycle_seq while a fresh claim won at the new one - two log ids,
+    // therefore two different Resend idempotency keys, therefore two emails.
+    const id = await addCustomer({ email: 'earl@oldhost.com', lastPumped: '2023-08-01' })
+    const first = await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET })
+    expect(first.sent).toBe(1)
+
+    await db().prepare("UPDATE reminder_log SET status = 'bounced' WHERE customer_id = ?").bind(id).run()
+    await db().prepare("UPDATE customers SET email_status = 'bounced' WHERE id = ?").bind(id).run()
+    sentRequests = []
+
+    await applyMutation(
+      db(),
+      { mutationId: uid('fix'), type: 'customer.update', createdAt: NINE_AM_ET,
+        payload: { customerId: id, changes: { email: 'earl@newhost.com' } } },
+      NINE_AM_ET
+    )
+    // The same afternoon: a last_pumped typo, corrected. Still inside the
+    // 60-day pre-due window, so the rung is genuinely still owed.
+    await applyMutation(
+      db(),
+      { mutationId: uid('typo'), type: 'last_pumped.correct', createdAt: NINE_AM_ET,
+        payload: { id: uid('visit'), customerId: id, lastPumped: '2023-08-05' } },
+      NINE_AM_ET + 6 * 60 * 60 * 1000
+    )
+
+    const next = await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET + DAY_MS })
+    expect(sentRequests.map((r) => r.body.to)).toEqual(['earl@newhost.com'])
+    expect(next.sent).toBe(1)
+  })
+
+  it('an in-flight rung blocks a fresh claim at a bumped cycle_seq', async () => {
+    // The half of the repeat guard the REARM case alone does not reach. The row
+    // is 'sending' and NOT yet stale, so the reaper does not requeue it and it
+    // never enters this run's retry list - and on `sent_at >= ?` it was invisible
+    // to the guard as well, because an in-flight row has no sent_at at all. A
+    // cycle_seq bump then freed the uniqueness index and a fresh claim won
+    // alongside it. That second send is a genuine duplicate: a Resend 500 can
+    // follow a message that was actually accepted, and the new row is a new log
+    // id, therefore a new idempotency key, so Resend does not dedupe it either.
+    stubResend({ status: 500, body: { message: 'upstream' } })
+    const id = await addCustomer({ lastPumped: '2023-08-14' })
+    await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET })
+    expect((await reminderRows())[0].status).toBe('sending')
+
+    // Five minutes later he corrects a last_pumped typo, which bumps cycle_seq.
+    await db()
+      .prepare("UPDATE customers SET last_pumped = '2023-08-10', cycle_seq = cycle_seq + 1 WHERE id = ?")
+      .bind(id)
+      .run()
+
+    stubResend({ status: 200, body: { id: 'msg-2' } })
+    sentRequests = []
+    // Ten minutes on: still inside STALE_CLAIM_MS, so nothing is reaped.
+    const second = await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET + 10 * 60 * 1000 })
+    expect(second.detail).toContain('reaped 0')
+    expect(sentRequests).toHaveLength(0)
+    expect(await reminderRows()).toHaveLength(1)
+  })
+
+  it('a spam complaint is never re-opened, whatever he edits', async () => {
+    // A complaint means the mail was DELIVERED and then reported. Continuing to
+    // mail that person is how a sending domain dies.
+    const id = await addCustomer({ email: 'earl@oldhost.com', lastPumped: '2023-08-01' })
+    await logRow({ customerId: id, key: 'pre', status: 'complained', sentAt: NINE_AM_ET - DAY_MS })
+    await db().prepare("UPDATE customers SET email_status = 'complained' WHERE id = ?").bind(id).run()
+    sentRequests = []
+
+    await applyMutation(
+      db(),
+      { mutationId: uid('fix'), type: 'customer.update', createdAt: NINE_AM_ET,
+        payload: { customerId: id, changes: { email: 'earl@newhost.com' } } },
+      NINE_AM_ET
+    )
+
+    await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET + 60_000 })
+    expect(sentRequests).toHaveLength(0)
+    expect((await db().prepare('SELECT email_status FROM customers WHERE id = ?').bind(id).first())
+      .email_status).toBe('complained')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// The repeat guard versus the width of the rung it guards.
+//
+// REPEAT_SUPPRESSION_MS was 30 days while the residential pre-due window is 60
+// days wide, and claimReminder's uniqueness key includes cycle_seq. So any edit
+// that bumps cycle_seq inside the first 30 days of a window re-opened the SAME
+// rung the moment the guard lapsed, and the homeowner was mailed twice about
+// the same pumping. The suite missed it because every test that asserted this
+// was closed looked exactly ONE day ahead.
+//
+// These run the clock 30, 60 and 150 days forward and assert the ACTUAL emails.
+// ---------------------------------------------------------------------------
+
+describe('the repeat guard covers the whole width of its own rung', () => {
+  it('PRE, 150 DAYS: a one-day correction does not buy a second pre-due email', async () => {
+    // due 2026-10-14 on a 36-month cycle, so the pre-due window opens
+    // 2026-08-15 and closes when the customer goes overdue in October.
+    const edited = await addCustomer({ lastPumped: '2023-10-14', email: 'edited@example.com' })
+    await addCustomer({ lastPumped: '2023-10-14', email: 'control@example.com' })
+
+    for (let day = 0; day < 150; day++) {
+      const date = shiftISO('2026-08-01', day)
+      if (date === '2026-08-20') {
+        // He corrects last_pumped by one day. cycle_seq is bumped and the
+        // customer's reminders are cleared - ordinary, deliberate behaviour.
+        await db()
+          .prepare("UPDATE customers SET last_pumped = '2023-10-15', cycle_seq = cycle_seq + 1 WHERE id = ?")
+          .bind(edited)
+          .run()
+      }
+      const at = nineAmETOn(date)
+      await runTenantReminders(tenant(), KEYED, { now: at })
+      await pinSends(at)
+    }
+
+    // One email each over 150 days: the edit changes nothing about how many
+    // times a homeowner hears from him.
+    expect(sentCounts()).toEqual({ 'edited@example.com': 1, 'control@example.com': 1 })
+  }, 120_000)
+
+  it('PRE: still silent 30 and 60 days after the edit', async () => {
+    const id = await addCustomer({ lastPumped: '2023-10-14' })
+    await runTenantReminders(tenant(), KEYED, { now: nineAmETOn('2026-08-15') })
+    await pinSends(nineAmETOn('2026-08-15'))
+    expect(sentRequests).toHaveLength(1)
+
+    await db()
+      .prepare("UPDATE customers SET last_pumped = '2023-10-15', cycle_seq = cycle_seq + 1 WHERE id = ?")
+      .bind(id)
+      .run()
+
+    for (const date of ['2026-09-14', '2026-09-15', '2026-10-14']) {
+      const result = await runTenantReminders(tenant(), KEYED, { now: nineAmETOn(date) })
+      expect(result.sent).toBe(0)
+    }
+    expect(sentRequests).toHaveLength(1)
+  }, 30_000)
+
+  it('OD2: the middle overdue rung is 60 days wide and holed the same way', async () => {
+    // The brief said only `pre` was exposed because the ladder steps are closer
+    // together than 30 days. That is true of od1 (+7 to +29) and false of od2,
+    // which is the newest earned rung from +30 to +89 - 60 days, twice the
+    // guard - and of od3, which is the newest earned rung forever after +90.
+    await setSettings({ overdue_reminders_enabled: '1' })
+    // due 2026-05-16, so 2026-06-15 is exactly 30 days past due: od2 is earned
+    // and is the newest rung.
+    const id = await addCustomer({ lastPumped: '2023-05-16' })
+    const first = await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET })
+    await pinSends(NINE_AM_ET)
+    expect(first.sent).toBe(1)
+    expect((await reminderRows())[0].reminder_key).toBe('od2')
+
+    // A two-day typo correction, which bumps cycle_seq.
+    await db()
+      .prepare("UPDATE customers SET last_pumped = '2023-05-14', cycle_seq = cycle_seq + 1 WHERE id = ?")
+      .bind(id)
+      .run()
+
+    // 45 days on: the 30-day guard has lapsed, the uniqueness key is free, and
+    // od2 is still the newest earned rung (od3 is not reached until +90).
+    const later = await runTenantReminders(tenant(), KEYED, { now: nineAmETOn('2026-07-30') })
+    expect(later.sent).toBe(0)
+    expect(sentRequests).toHaveLength(1)
+  }, 30_000)
+
+  it('OD3: the last rung never repeats for the same due date', async () => {
+    await setSettings({ overdue_reminders_enabled: '1' })
+    // due 2026-01-10; today is more than 90 days past, so od3 is earned and
+    // stays the newest earned rung for as long as the due date does not move.
+    const id = await addCustomer({ lastPumped: '2023-01-10' })
+    const first = await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET })
+    await pinSends(NINE_AM_ET)
+    expect(first.sent).toBe(1)
+    expect((await reminderRows())[0].reminder_key).toBe('od3')
+
+    await db()
+      .prepare("UPDATE customers SET last_pumped = '2023-01-08', cycle_seq = cycle_seq + 1 WHERE id = ?")
+      .bind(id)
+      .run()
+
+    for (const date of ['2026-07-20', '2026-09-01', '2026-11-05']) {
+      const at = nineAmETOn(date)
+      await runTenantReminders(tenant(), KEYED, { now: at })
+      await pinSends(at)
+    }
+    expect(sentRequests).toHaveLength(1)
+  }, 30_000)
+
+  it('and a real pumping still starts a fresh pre-due notice', async () => {
+    // The guard must widen without becoming a permanent block: the whole point
+    // of the product is that the next cycle gets its own reminder.
+    const id = await addCustomer({ lastPumped: '2023-10-14' })
+    await runTenantReminders(tenant(), KEYED, { now: nineAmETOn('2026-08-15') })
+    await pinSends(nineAmETOn('2026-08-15'))
+    expect(sentRequests).toHaveLength(1)
+
+    // He pumps the tank in October and records the visit: due 2029-10-20.
+    await db()
+      .prepare("UPDATE customers SET last_pumped = '2026-10-20', cycle_seq = cycle_seq + 1 WHERE id = ?")
+      .bind(id)
+      .run()
+
+    // Nothing in between...
+    await runTenantReminders(tenant(), KEYED, { now: nineAmETOn('2026-11-15') })
+    expect(sentRequests).toHaveLength(1)
+
+    // ...and the next cycle's notice goes out when its window opens.
+    const next = await runTenantReminders(tenant(), KEYED, { now: nineAmETOn('2029-08-21') })
+    expect(next.sent).toBe(1)
+    expect(sentRequests).toHaveLength(2)
+  }, 30_000)
+})
+
+// ---------------------------------------------------------------------------
+// The zone comes from deploy config and nowhere else.
+//
+// A one-word typo in the settings row ('America/New_Yrok') threw out of
+// hourInZone before the first job_runs insert, so runReminderCron logged an
+// error to a console nobody reads, wrote no job_runs row, sent no mail, and
+// never reached the owner digests: the client's entire book stopped silently
+// while the app looked healthy. The zone is now read from the deploy-config
+// tenant entry, which the deploy check validates, and the settings row is not
+// read at all.
+// ---------------------------------------------------------------------------
+
+describe('the tenant calendar comes from deploy config', () => {
+  it('ignores a typo in the settings timezone row completely', async () => {
+    await setSettings({ timezone: 'America/New_Yrok' })
+    await addCustomer({ lastPumped: '2023-08-14' })
+    const pacific = tenant({ timezone: 'America/Los_Angeles' })
+
+    // 13:00Z is 09:00 Eastern and 06:00 Pacific: the send hour of the DEAD
+    // settings value, not of the live one. Nothing goes out, and the run is
+    // recorded rather than thrown away.
+    const early = await runTenantReminders(pacific, KEYED, { now: NINE_AM_ET })
+    expect(early.status).toBe('skipped')
+    expect(early.detail).toContain('America/Los_Angeles')
+    expect(sentRequests).toHaveLength(0)
+
+    // 16:00Z is 09:00 Pacific.
+    const onTime = await runTenantReminders(pacific, KEYED, {
+      now: Date.parse('2026-06-15T16:00:00Z'),
+    })
+    expect(onTime.sent).toBe(1)
+    expect(sentRequests).toHaveLength(1)
+
+    const jobs = await jobRows()
+    expect(jobs).toHaveLength(2)
+    expect(jobs.every((row) => row.job === 'reminders')).toBe(true)
+  })
+
+  it('runs the cron for a book whose settings row is a bad zone', async () => {
+    // The verifier's reproduction, at the cron level: outcomes were
+    // [{status:'error', detail:'Invalid time zone specified: America/New_Yrok'}]
+    // with zero job_runs rows and zero emails.
+    await setSettings({ timezone: 'America/New_Yrok' })
+    await addCustomer({ lastPumped: '2023-08-14' })
+
+    const outcomes = await runReminderCron(KEYED, { now: NINE_AM_ET })
+    expect(outcomes.map((o) => o.status)).not.toContain('error')
+    expect(await jobRows()).toHaveLength(1)
   })
 })

@@ -136,9 +136,58 @@ describe('localStorage export normalization', () => {
       sentAt: { 'real-001:60': '2026-07-01', 'real-001:14': '2026-07-15' },
     }))
     expect(out.reminders).toMatchObject([
-      { customerId: 'real-001', reminderKey: '60', channel: 'email', sentAt: Date.parse('2026-07-01T12:00:00Z') },
-      { customerId: 'real-001', reminderKey: '14', channel: 'sms', sentAt: Date.parse('2026-07-15T12:00:00Z') },
+      { customerId: 'real-001', reminderKey: 'pre', channel: 'email', sentAt: Date.parse('2026-07-01T12:00:00Z') },
+      { customerId: 'real-001', reminderKey: 'sms', channel: 'sms', sentAt: Date.parse('2026-07-15T12:00:00Z') },
     ])
+  })
+
+  // This is the path that carries a paying client's book during setup week, and
+  // the app has written `pre`/`sms` since the rungs were re-keyed.
+  it('imports a book exported by the current app', () => {
+    const out = model(state([customer()], {
+      sentReminders: ['real-001:pre', 'real-001:sms'],
+      sentAt: { 'real-001:pre': '2026-07-01', 'real-001:sms': '2026-07-15' },
+    }))
+    expect(out.reminders).toMatchObject([
+      { customerId: 'real-001', reminderKey: 'pre', channel: 'email', toEmail: 'owner@example.com' },
+      { customerId: 'real-001', reminderKey: 'sms', channel: 'sms', toEmail: '' },
+    ])
+  })
+
+  it('normalizes both old email offsets onto the canonical pre-due rung', () => {
+    const out = model(state([customer({ cycleMonths: 3 })], {
+      sentReminders: ['real-001:15'],
+      sentAt: { 'real-001:15': '2026-07-01' },
+    }))
+    expect(out.reminders).toMatchObject([{ reminderKey: 'pre', channel: 'email' }])
+  })
+
+  it('collapses a book holding both key generations, keeping the newer send and flagging it', () => {
+    const out = model(state([customer()], {
+      sentReminders: ['real-001:60', 'real-001:pre'],
+      sentAt: { 'real-001:60': '2026-07-01', 'real-001:pre': '2026-07-20' },
+    }))
+    expect(out.reminders).toMatchObject([
+      { customerId: 'real-001', reminderKey: 'pre', sentAt: Date.parse('2026-07-20T12:00:00Z') },
+    ])
+    expect(out.flags.filter((flag) => flag.kind === 'duplicate_reminder_key')).toHaveLength(1)
+
+    const older = model(state([customer()], {
+      sentReminders: ['real-001:60', 'real-001:pre'],
+      sentAt: { 'real-001:60': '2026-07-20', 'real-001:pre': '2026-07-01' },
+    }))
+    expect(older.reminders).toMatchObject([
+      { reminderKey: 'pre', sentAt: Date.parse('2026-07-20T12:00:00Z') },
+    ])
+  })
+
+  it('still refuses keys a manual-send projection can never hold', () => {
+    expect(() => model(state([customer()], {
+      sentReminders: ['real-001:od1'], sentAt: { 'real-001:od1': '2026-07-01' },
+    }))).toThrow(/does not match an imported customer\/key/i)
+    expect(() => model(state([customer()], {
+      sentReminders: ['nobody:pre'], sentAt: { 'nobody:pre': '2026-07-01' },
+    }))).toThrow(/does not match an imported customer\/key/i)
   })
 
   it('normalizes numeric strings and rejects invalid tank/cycle values', () => {
@@ -207,7 +256,7 @@ describe('generated SQL', () => {
     expect(first.customers).toHaveLength(1)
     expect(first.visits).toHaveLength(1)
     expect(first.reminders).toHaveLength(1)
-    expect(first.reminders[0]).toMatchObject({ customer_id: 'real-001', reminder_key: '60', channel: 'email', status: 'sent' })
+    expect(first.reminders[0]).toMatchObject({ customer_id: 'real-001', reminder_key: 'pre', channel: 'email', status: 'sent' })
     expect(first.visits[0]).toMatchObject({ customer_id: 'real-001', visited_on: '2025-08-01', sets_last_pumped: 1 })
     expect(first.customers[0].last_pumped).toBe(first.visits[0].visited_on)
     expect(first.customers[0].seq).not.toBe(first.visits[0].seq)
@@ -227,6 +276,26 @@ describe('generated SQL', () => {
       { id: 'outside', lat: null, lng: null, location_precision: '', location_confirmed_at: null, address_changed_at: null },
     ])
     expect(rows(db, 'SELECT count(*) AS count FROM import_flags')[0].count).toBe(2)
+    db.close()
+  })
+
+  // Normalising two key generations onto one rung can collide on
+  // uq_reminder_log_send, and a collision inside the generated artifact would
+  // abort the whole client import.
+  it('applies a mixed-key book against the real uniqueness index', () => {
+    const db = migratedDb()
+    db.exec(generateSql(model(state([customer()], {
+      sentReminders: ['real-001:60', 'real-001:pre', 'real-001:14', 'real-001:sms'],
+      sentAt: {
+        'real-001:60': '2026-07-01', 'real-001:pre': '2026-07-20',
+        'real-001:14': '2026-07-02', 'real-001:sms': '2026-07-21',
+      },
+    }))))
+    expect(rows(db, 'SELECT reminder_key, channel, sent_at FROM reminder_log ORDER BY reminder_key')).toEqual([
+      { reminder_key: 'pre', channel: 'email', sent_at: Date.parse('2026-07-20T12:00:00Z') },
+      { reminder_key: 'sms', channel: 'sms', sent_at: Date.parse('2026-07-21T12:00:00Z') },
+    ])
+    expect(rows(db, "SELECT count(*) AS count FROM import_flags WHERE message LIKE '%duplicat%'")[0].count).toBe(2)
     db.close()
   })
 

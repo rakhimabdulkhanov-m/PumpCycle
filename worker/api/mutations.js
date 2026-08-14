@@ -1,7 +1,9 @@
 import { json } from '../lib/json.js'
 import { isSanePoint } from '../lib/geocode/geo.js'
-import { projectCustomer } from '../lib/projection.js'
+import { projectCustomer, projectReminder } from '../lib/projection.js'
+import { STALE_CLAIM_MS } from '../lib/reminder_send.js'
 import { isDifferentAddress } from '../../src/lib/location.js'
+import { isDifferentEmail } from '../../src/lib/email.js'
 import { hasLocation } from '../../src/lib/point.js'
 
 const MAX_BODY_BYTES = 32 * 1024
@@ -259,6 +261,72 @@ async function updateCustomer(db, envelope, now, actorUserId) {
     assignments.push('cycle_seq = cycle_seq + 1')
     after.cycleSeq = previous.cycle_seq + 1
   }
+  // Correcting a dead address re-arms the automatic sender.
+  //
+  // reminder_send.js skips any customer whose email_status is not 'ok', and
+  // nothing else in the system ever sets it back, so without this a single hard
+  // bounce silences a customer for the life of the account and the Reminders
+  // tab's Fix button leads nowhere. A BOUNCE is evidence against an ADDRESS, not
+  // against a customer: a different address is a different recipient, including
+  // an emptied one (there is nothing left to be bad, and the tab surfaces "no
+  // email address on file" separately). Being wrong here costs exactly one
+  // bounce - the webhook re-suppresses a genuinely dead new address on the next
+  // send.
+  //
+  // A COMPLAINT IS NOT A BOUNCE AND IS NOT LIFTED HERE, by any edit, ever.
+  // webhooks.js: "A complaint is a spam report. Permanent, no escalation ladder,
+  // no second chance - continuing to mail someone who reported you is how a
+  // sending domain dies." It is also doubly wrong to re-open the rung: a
+  // complaint means the mail was DELIVERED and then reported, so there is no
+  // undelivered reminder to resume. The Reminders tab tells him the action that
+  // does work (ADDRESS_PROBLEMS.complained: call them), because nothing in the
+  // app clears this one.
+  const emailCorrected =
+    Object.hasOwn(p.changes, 'email') &&
+    isDifferentEmail(after.email, previous.email) &&
+    previous.email_status !== 'complained'
+  if (emailCorrected) {
+    assignments.push("email_status = 'ok'", 'soft_bounce_count = 0')
+    after.emailStatus = 'ok'
+    after.softBounceCount = 0
+  }
+  // ...and it re-opens the undelivered rungs of the cycle he is standing in.
+  //
+  // Clearing email_status alone changes nothing, for two independent reasons:
+  // the bounced row still holds (customer, rung, cycle, channel) in the
+  // uniqueness index, so claimReminder's ON CONFLICT DO NOTHING can never win a
+  // fresh claim for this cycle; and runTenantReminders filters recently
+  // 'bounced'/'complained' rungs out of its candidates for 30 days. Without
+  // this the operator corrects the address, watches the red warning disappear,
+  // and the customer still receives nothing - worse than the original bug,
+  // because now he believes he fixed it.
+  //
+  // Only genuine non-deliveries are re-opened. A 'sent' rung reached the
+  // customer and re-sending it would mail a second copy of something they
+  // already have; a 'complained' rung reached them and was reported as spam,
+  // which is permanent; a 'sending' row is mid-flight and belongs to the reaper;
+  // an SMS rung was never blocked by an email address; a previous cycle's moment
+  // passed with the cycle. And when the cycle itself just rolled over, the
+  // bumped cycle_seq has already freed the index, so there is nothing to do.
+  //
+  // AT MOST ONE ROW, the most recently failed. A customer whose pre, od1 and od2
+  // all bounced in one cycle is the designed path, not a corruption - webhooks.js
+  // only flips email_status on the THIRD soft bounce - and re-opening all three
+  // mailed a homeowner three times in one morning, on top of whatever rung the
+  // ladder earned today. dueReminders sends only the newest earned rung for
+  // exactly this reason; this path used to walk around that rule. One
+  // correction, at most one email.
+  const reopen = emailCorrected && after.email.trim() !== '' && !cycleChanged
+    ? ((await db
+        .prepare(
+          `SELECT * FROM reminder_log
+            WHERE customer_id = ? AND cycle_seq = ? AND channel = 'email'
+              AND status IN ('bounced', 'failed')
+            ORDER BY seq DESC LIMIT 1`
+        )
+        .bind(customerId, previous.cycle_seq)
+        .all()).results || [])
+    : []
   if (
     Object.hasOwn(p.changes, 'address') &&
     hasLocation(snapshotCustomer(previous)) &&
@@ -268,12 +336,78 @@ async function updateCustomer(db, envelope, now, actorUserId) {
     bindings.push(now)
     after.addressChangedAt = now
   }
-  assignments.push('edited_in_app = 1', 'updated_at = ?', `seq = ${seqValue(1, 0)}`)
+  const seqCount = 1 + reopen.length
+  assignments.push('edited_in_app = 1', 'updated_at = ?', `seq = ${seqValue(seqCount, 0)}`)
   bindings.push(now, customerId)
   const result = ack(envelope)
+  // Replaced rather than updated in place, because the row id IS the Resend
+  // Idempotency-Key. Resend honours a key for 24 hours and answers a reuse
+  // carrying a different payload with 409 invalid_idempotent_request - and the
+  // payload is exactly what changed here, that being the whole point. Reusing
+  // the id would turn a same-day correction into a hard failure. The delete has
+  // to precede the insert: the uniqueness index is the thing being freed.
+  //
+  // claimed_at is stamped one second past the reaper's staleness cutoff, not 0.
+  // Both are "reap me now", but 0 is also outside every window the sender
+  // measures: its 30-day repeat guard compares COALESCE(sent_at, claimed_at),
+  // and a row at the epoch falls out of it entirely. That is how a corrected
+  // address plus a same-afternoon cycle_seq bump produced two identical emails -
+  // the re-opened row retried at the old cycle_seq while a fresh claim won at
+  // the new one. STALE_CLAIM_MS is imported rather than restated so the two
+  // cannot drift apart.
+  //
+  // reported_at starts NULL. Carrying it over meant that if this second attempt
+  // also failed, the new row was 'failed' with reported_at already set, and
+  // owner_digest.js selects on reported_at IS NULL alone - so that failure
+  // reached nobody, and 'failed' does not touch email_status either, so the
+  // weekly's standing bad-address list missed it too. The row starts 'sending',
+  // not failed, so the problem mail cannot select it until it actually fails,
+  // and the deleted row's failure was already reported. The rule is "every
+  // failure is reported at least once and never lost", not "exactly once":
+  // given a choice between losing a failure and repeating one, repeat.
+  const claimedAt = now - STALE_CLAIM_MS - 1000
+  const requeues = reopen.flatMap((row, index) => {
+    const replacementId = `${envelope.mutationId}:requeue:${index}`
+    const before = { ...projectReminder(row), reportedAt: row.reported_at ?? null }
+    // The DELETE takes the bounce out of reminder_log, and reminder_log has no
+    // archived_at - so mergeRows in src/lib/wire.js, which only drops rows
+    // carrying archivedAt, leaves a browser that already synced the bounce
+    // holding it while a fresh device never sees it. Server-side it would be
+    // recoverable from nowhere at all. The audit row is where it survives.
+    return [
+      db.prepare('DELETE FROM reminder_log WHERE id = ?').bind(row.id),
+      db.prepare(
+        `INSERT INTO reminder_log
+           (id, customer_id, reminder_key, cycle_seq, channel, provider, provider_message_id,
+            to_email, status, attempts, claimed_at, sent_at, error, reported_at, seq)
+         VALUES (?, ?, ?, ?, 'email', 'resend', '', ?, 'sending', 0, ?, NULL, '', NULL,
+                 ${seqValue(seqCount, index + 1)})`
+      ).bind(
+        replacementId,
+        customerId,
+        row.reminder_key,
+        previous.cycle_seq,
+        after.email,
+        claimedAt
+      ),
+      audit(db, now, actorUserId, 'reminder', row.id, 'reminder.requeued', before, {
+        ...before,
+        id: replacementId,
+        toEmail: after.email,
+        status: 'sending',
+        attempts: 0,
+        claimedAt,
+        sentAt: null,
+        error: '',
+        reportedAt: null,
+        providerMessageId: '',
+      }),
+    ]
+  })
   await db.batch([
-    reserveSeqs(db, 1),
+    reserveSeqs(db, seqCount),
     db.prepare(`UPDATE customers SET ${assignments.join(', ')} WHERE id = ?`).bind(...bindings),
+    ...requeues,
     audit(db, now, actorUserId, 'customer', customerId, envelope.type, snapshotCustomer(previous), after),
     applied(db, envelope, now, actorUserId, result),
   ])

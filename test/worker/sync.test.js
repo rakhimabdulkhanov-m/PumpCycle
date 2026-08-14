@@ -97,7 +97,73 @@ describe('sync cursor and projections', () => {
     expect(result.photos[0]).toMatchObject({ customerId: active, r2Key: '', archivedAt: 3333 })
     expect(result.reminderLog[0]).toMatchObject({ customerId: active, reminderKey: '14', provider: '' })
     expect(result.sentReminders).toContain(`${active}:14`)
-    expect(result.sentAt[`${active}:14`]).toBe('2024-08-13')
+    // 1723507200000 is 2024-08-13T00:00Z, which is still the evening of the
+    // 12th in this book's timezone. The operator's calendar, not the Worker's.
+    expect(result.sentAt[`${active}:14`]).toBe('2024-08-12')
+  })
+
+  // The Worker's own clock is UTC, so a text marked sent after 20:00 Eastern is
+  // "tomorrow" to it. This projection replaces the browser's optimistic value on
+  // the next sync, so it has to speak the tenant's calendar or the Reminders tab
+  // prints tomorrow's date back at the operator this evening.
+  it('dates a send in the tenant timezone rather than UTC', async () => {
+    const [customerSeq, reminderSeq] = await nextSeq(db(), 2)
+    const id = unique('tz')
+    await insertCustomer(id, customerSeq)
+    await db().prepare(
+      `INSERT INTO reminder_log
+       (id, customer_id, reminder_key, cycle_seq, channel, status, claimed_at, sent_at, seq)
+       VALUES (?, ?, 'sms', 0, 'sms', 'sent', 1, ?, ?)`
+    ).bind(unique('reminder'), id, Date.UTC(2026, 7, 15, 1, 30), reminderSeq).run()
+
+    // 2026-08-15T01:30Z is 2026-08-14 21:30 in America/New_York - the product
+    // default here, since neither call passes a tenant config zone.
+    const direct = await syncSince(db(), 0)
+    expect(direct.sentAt[`${id}:sms`]).toBe('2026-08-14')
+
+    const response = await get(new Request('https://app.pumpcycle.net/api/sync'), {}, {}, { db: db() })
+    expect((await response.json()).sentAt[`${id}:sms`]).toBe('2026-08-14')
+  })
+
+  // The settings row used to WIN over the tenant config at every read site, it
+  // lives in the client's own D1, and nothing validated it. A one-word typo in a
+  // provisioning statement therefore made GET /api/sync throw - the operator's
+  // app would not load at all, which is his whole business stopped - and stopped
+  // the reminder cron dead without recording anything. The row is no longer read
+  // by anything, which is what this asserts: not that a bad value is tolerated,
+  // but that it has no effect at all.
+  it('ignores the settings timezone row entirely, typo or not', async () => {
+    const [customerSeq, reminderSeq] = await nextSeq(db(), 2)
+    const id = unique('badzone')
+    await insertCustomer(id, customerSeq)
+    await db().prepare(
+      `INSERT INTO reminder_log
+       (id, customer_id, reminder_key, cycle_seq, channel, status, claimed_at, sent_at, seq)
+       VALUES (?, ?, 'sms', 0, 'sms', 'sent', 1, ?, ?)`
+    ).bind(unique('reminder'), id, Date.UTC(2026, 7, 15, 1, 30), reminderSeq).run()
+
+    const setZone = (value) => db().prepare(
+      `INSERT INTO settings (key, value, updated_at) VALUES ('timezone', ?, 1)
+       ON CONFLICT (key) DO UPDATE SET value = excluded.value`
+    ).bind(value).run()
+
+    try {
+      await setZone('America/New_Yrok')
+      // The tenant config decides: 2026-08-15T01:30Z is 2026-08-14 in Los
+      // Angeles, and the unreadable row changes nothing.
+      const withTenant = await syncSince(db(), 0, { config: { timezone: 'America/Los_Angeles' } })
+      expect(withTenant.sentAt[`${id}:sms`]).toBe('2026-08-14')
+
+      // And the same with no tenant config at all: the product default applies,
+      // still never the row.
+      const bare = await syncSince(db(), 0)
+      expect(bare.sentAt[`${id}:sms`]).toBe('2026-08-14')
+
+      const response = await get(new Request('https://app.pumpcycle.net/api/sync'), {}, {}, { db: db() })
+      expect(response.status).toBe(200)
+    } finally {
+      await setZone('America/New_York')
+    }
   })
 
   it('returns the complete typed settings projection even when since is current', async () => {

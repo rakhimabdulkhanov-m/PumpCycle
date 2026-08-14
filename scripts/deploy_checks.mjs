@@ -104,6 +104,36 @@ export function readWranglerConfig(path) {
 }
 
 // ---------------------------------------------------------------------------
+// Tenant timezone
+// ---------------------------------------------------------------------------
+
+/**
+ * Would the runtime accept this string as a timezone?
+ *
+ * Asked the way the runtime asks it - construct an Intl.DateTimeFormat and let
+ * a RangeError be the answer - rather than against a hardcoded list of zones,
+ * which would go stale the first time the IANA database gains an entry and
+ * would fail a tenant whose zone is perfectly good.
+ *
+ * This runs under Node while the code it protects runs under workerd. Both ship
+ * full ICU (test/worker/icu_probe.test.js is the workerd half of that guard), so
+ * the two answers agree for every real zone; a zone so new that only one of them
+ * knows it would be the one gap, and it is a far smaller gap than not checking.
+ *
+ * Only RangeError means "invalid". Anything else is a runtime without ICU at
+ * all, and swallowing that would turn a broken toolchain into a green deploy.
+ */
+export function isValidTimeZone(zone) {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: zone })
+    return true
+  } catch (error) {
+    if (error instanceof RangeError) return false
+    throw error
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Tenant wiring
 // ---------------------------------------------------------------------------
 
@@ -126,6 +156,12 @@ export function readWranglerConfig(path) {
  *     one tenants.config names -> preflight checks the wrong database and passes
  *     while the real one is at version 0. This is the one host-string matching
  *     alone cannot see.
+ *
+ *   - host configured with a timezone ICU does not know -> that host's GET /api/sync
+ *     throws, the operator's app does not load, and the reminder cron stops mailing
+ *     that book. Not a wiring mismatch, but the same shape of failure: a deploy-time
+ *     typo nothing downstream sees. This config value is the tenant's ONLY calendar
+ *     input, so rejecting it here is what keeps a bad zone off a live tenant.
  *
  *   - TWO LIVE HOSTS ON ONE BINDING -> two paying clients reading and writing one
  *     customer book. This is the worst failure this product can have, it is
@@ -230,6 +266,36 @@ export function checkTenantWiring({ liveTenants, tenants, wranglerConfig }) {
           `database '${tenant.d1}'. Preflight would migrate and version-check ` +
           `'${tenant.d1}' while the hostname actually reads '${binding.database_name}'. ` +
           `Make them the same database.`
+      )
+    }
+
+    // A tenant timezone ICU does not recognise is a one-word typo with a cost
+    // out of all proportion to it. The send path formats the tenant calendar
+    // with ICU and no offset fallback - deliberately, because a silent fallback
+    // would hide a misconfigured tenant and send that client's mail on the wrong
+    // day, and mail at 3am reads as a compromised account.
+    //
+    // THIS CHECK IS THE WHOLE GUARANTEE. `cfg.timezone` is the tenant config,
+    // and since the settings-row override was removed it is the ONLY input to a
+    // tenant's calendar (worker/tenants.js tenantZone; the `timezone` row in the
+    // client's D1 is dead data that nothing reads). Everything downstream - the
+    // app's bootstrap, the sent-history dates, the send hour and the local day
+    // the cron mails on - is computed from the string checked here, so a zone
+    // this rejects can never reach a running tenant.
+    //
+    // That is why the check must stay even though app.pumpcycle.net's zone is
+    // obviously fine: it protects the client who does not exist yet, whose zone
+    // gets typed on the day he is provisioned. Same reason as the
+    // two-hosts-one-binding check above.
+    //
+    // Absent or empty is NOT a failure: both are falsy in tenantZone, so the
+    // product default applies and ICU is never handed the value.
+    if (cfg.timezone !== undefined && cfg.timezone !== '' && !isValidTimeZone(cfg.timezone)) {
+      problems.push(
+        `'${host}' is configured with the timezone '${cfg.timezone}', which is not a timezone ` +
+          `this runtime knows. The reminder cron formats every tenant-local date and hour with ` +
+          `ICU and has no offset fallback, so this host's scheduled send would fail rather than ` +
+          `mail at the wrong hour. Use an IANA zone name such as 'America/New_York'.`
       )
     }
 

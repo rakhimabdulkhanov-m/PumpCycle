@@ -1,4 +1,5 @@
 import { json } from '../lib/json.js'
+import { tenantZone } from '../tenants.js'
 import {
   projectCustomer,
   projectPhoto,
@@ -20,8 +21,19 @@ async function rows(db, sql, ...bindings) {
   return (await db.prepare(sql).bind(...bindings).all()).results
 }
 
-/** Read a bounded delta directly from D1. Exported for adapter and D1 tests. */
-export async function syncSince(db, since = 0) {
+/**
+ * Read a bounded delta directly from D1. Exported for adapter and D1 tests.
+ *
+ * `tenant` is optional and supplies only the calendar the sent-history dates are
+ * rendered in. That calendar is deploy config (worker/tenants.js tenantZone) and
+ * nothing else: the `timezone` settings row this endpoint used to prefer was
+ * hand-typed, validated by nothing, and outranked the reviewed value - one
+ * transposed letter in it stopped a client's entire mail run. There is no
+ * read-time tolerance here any more because there is no longer an unvalidated
+ * input to tolerate; a bad zone can now only come from a file the deploy check
+ * reads (scripts/deploy_checks.mjs) and rejects.
+ */
+export async function syncSince(db, since = 0, tenant = null) {
   // seq_counter is an allocator, not a commit marker. A failed caller batch leaves
   // a gap there, so advancing to it would make a later committed row invisible.
   const high = await db.prepare(
@@ -51,6 +63,8 @@ export async function syncSince(db, since = 0) {
       ),
     ])
 
+  const settings = projectSettings(settingRows)
+
   return {
     ok: true,
     cursor,
@@ -58,13 +72,13 @@ export async function syncSince(db, since = 0) {
     visits: visitRows.map(projectVisit),
     photos: photoRows.map(projectPhoto),
     reminderLog: reminderRows.map(projectReminder),
-    settings: projectSettings(settingRows),
-    ...reminderCompatibility(currentReminderRows),
+    settings,
+    ...reminderCompatibility(currentReminderRows, tenantZone(tenant)),
   }
 }
 
 export async function get(request, env, ctx, tenant) {
   const since = parseSince(request)
   if (since === null) return json({ ok: false, error: 'since must be a nonnegative safe integer' }, 400)
-  return json(await syncSince(tenant.db, since))
+  return json(await syncSince(tenant.db, since, tenant))
 }

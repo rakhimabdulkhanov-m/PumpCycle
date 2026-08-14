@@ -4,6 +4,7 @@ import { SMS_KEY } from '../lib/reminders.js'
 import {
   customersNeedingEmail,
   groupSchedule,
+  markSentOutcome,
   nothingToDoLine,
   repeatWarning,
   sentActivity,
@@ -75,7 +76,7 @@ function Quiet({ children }) {
  * One guard entry for the whole stack - the repeat question opens as a second
  * layer, never as a second history entry.
  */
-function PreviewPanel({ customer, warning, onMarkSent, onCopy, onClose }) {
+function PreviewPanel({ customer, warning, saving, onMarkSent, onCopy, onClose }) {
   const [confirming, setConfirming] = useState(false)
   const message = messageText(customer)
   const isTouch = window.matchMedia('(pointer: coarse)').matches
@@ -117,9 +118,10 @@ function PreviewPanel({ customer, warning, onMarkSent, onCopy, onClose }) {
             <div className="mt-3 flex flex-col gap-2">
               <button
                 onClick={onMarkSent}
-                className="w-full rounded-lg bg-green-700 px-4 py-3 text-lg font-semibold text-white hover:bg-green-800"
+                disabled={saving}
+                className="w-full rounded-lg bg-green-700 px-4 py-3 text-lg font-semibold text-white hover:bg-green-800 disabled:opacity-60"
               >
-                Yes, send another copy
+                {saving ? 'Saving...' : 'Yes, send another copy'}
               </button>
               <button
                 onClick={() => setConfirming(false)}
@@ -147,9 +149,10 @@ function PreviewPanel({ customer, warning, onMarkSent, onCopy, onClose }) {
             </button>
             <button
               onClick={() => (warning ? setConfirming(true) : onMarkSent())}
-              className="w-full rounded-lg bg-green-700 px-4 py-3 text-lg font-semibold text-white hover:bg-green-800"
+              disabled={saving}
+              className="w-full rounded-lg bg-green-700 px-4 py-3 text-lg font-semibold text-white hover:bg-green-800 disabled:opacity-60"
             >
-              Mark as sent
+              {saving ? 'Saving...' : 'Mark as sent'}
             </button>
             <p className="text-sm text-gray-500">
               Text it yourself, then tap “Mark as sent.”
@@ -218,6 +221,7 @@ export default function RemindersTab({
   const [selectedId, setSelectedId] = useState(null)
   const [cardId, setCardId] = useState(null)
   const [toast, setToast] = useState(null)
+  const [saving, setSaving] = useState(false)
   const [beyondOpen, setBeyondOpen] = useState(false)
   const [allAddresses, setAllAddresses] = useState(false)
   const [openMonths, setOpenMonths] = useState(() => new Set())
@@ -259,10 +263,18 @@ export default function RemindersTab({
     ? repeatWarning(selected.customerId, SMS_KEY, { reminderLog, sentAt })
     : null
 
-  function markSent(item, customer) {
-    onMarkSent(item.id)
-    setToast(`Marked sent to ${customer.name}`)
-    setSelectedId(null)
+  // Await the write before saying anything. `saving` also guards the button: a
+  // double tap on a slow phone would otherwise queue the send twice.
+  async function markSent(item, customer) {
+    if (saving) return
+    setSaving(true)
+    try {
+      const outcome = await markSentOutcome(onMarkSent, item.id, customer.name)
+      setToast(outcome.toast)
+      if (outcome.close) setSelectedId(null)
+    } finally {
+      setSaving(false)
+    }
   }
 
   function copyMessage(message) {
@@ -453,6 +465,7 @@ export default function RemindersTab({
         <PreviewPanel
           customer={selectedCustomer}
           warning={warning}
+          saving={saving}
           onMarkSent={() => markSent(selected, selectedCustomer)}
           onCopy={copyMessage}
           onClose={() => setSelectedId(null)}

@@ -1,3 +1,5 @@
+import { toISODate } from './dates.js'
+import { isDifferentEmail } from './email.js'
 import { stampAddressChange } from './location.js'
 
 export const MUTATION_TYPES = Object.freeze([
@@ -73,9 +75,25 @@ function updateCustomer(snapshot, mutation) {
   if (!previous) return snapshot
   const patch = stampAddressChange(previous, changes, mutation.createdAt)
   const cycleChanged = own(changes, 'cycleMonths') && changes.cycleMonths !== previous.cycleMonths
+  // The same rule the Worker applies (worker/api/mutations.js): a genuinely
+  // different address is a different recipient, so a BOUNCE recorded against the
+  // old one stops applying. Applied optimistically so the red row on the
+  // Reminders tab clears the moment he saves the correction rather than after
+  // the next sync - which means it must match the server exactly, or the row
+  // flickers back.
+  //
+  // A COMPLAINT IS NOT A BOUNCE and is not lifted by any edit, on either side.
+  // The server keeps email_status 'complained' whatever the address becomes, so
+  // clearing it here would tell him for a few seconds that the one problem the
+  // app cannot fix is fixed, and then take it back on the next sync.
+  const emailChanged =
+    own(changes, 'email') &&
+    isDifferentEmail(changes.email, previous.email) &&
+    previous.emailStatus !== 'complained'
   let next = replaceCustomer(snapshot, customerId, (customer) => ({
     ...customer,
     ...patch,
+    ...(emailChanged ? { emailStatus: 'ok', softBounceCount: 0 } : {}),
     ...(cycleChanged && own(customer, 'cycleSeq')
       ? { cycleSeq: (customer.cycleSeq || 0) + 1 }
       : {}),
@@ -189,7 +207,12 @@ function markReminderSent(snapshot, mutation) {
     : [...array(snapshot.sentReminders), compatibilityId]
   const sentAt = {
     ...(snapshot.sentAt || {}),
-    [compatibilityId]: new Date(mutation.createdAt).toISOString().slice(0, 10),
+    // The operator's calendar day, not UTC's: a text marked sent at 20:30
+    // Eastern was sent today, and the tab prints this date back at him in the
+    // repeat question. The server projection (worker/lib/projection.js) formats
+    // the same moment in the tenant's zone, so the value that replaces this one
+    // on the next sync agrees with it.
+    [compatibilityId]: toISODate(new Date(mutation.createdAt)),
   }
   if (!Array.isArray(snapshot.reminderLog)) return { ...snapshot, sentReminders, sentAt }
   const customer = array(snapshot.customers).find((row) => row.id === customerId)

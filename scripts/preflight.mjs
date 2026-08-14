@@ -3,7 +3,8 @@
  * preflight.mjs — the deploy gate.
  *
  *   0. Assert worker/tenants.js, wrangler.jsonc and tenants.config.mjs describe
- *      the SAME database for every live host (checkTenantWiring, no network).
+ *      the SAME database for every live host, and that every configured tenant
+ *      timezone is one ICU knows (checkTenantWiring, no network).
  *
  * Then, for every tenant in tenants.config.mjs:
  *   1. Assert the D1 database exists (wrangler d1 info).
