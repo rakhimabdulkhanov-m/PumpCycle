@@ -86,6 +86,8 @@ export function projectReminder(row) {
     claimedAt: value(row, 'claimed_at', 0),
     sentAt: row.sent_at ?? null,
     error: value(row, 'error'),
+    forLastPumped: row.for_last_pumped ?? null,
+    forVisitId: row.for_visit_id ?? null,
     seq: value(row, 'seq', 0),
   }
 }

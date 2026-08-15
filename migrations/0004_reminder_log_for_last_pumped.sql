@@ -1,0 +1,47 @@
+-- D1 schema migration 0004 — reminder_log: for_last_pumped and for_visit_id
+--
+-- Rules (same as 0001, 0002 and 0003): no BEGIN/COMMIT (D1 rejects them in
+-- --file mode). Moments = INTEGER ms epoch UTC; calendar days = TEXT YYYY-MM-DD,
+-- the same shape customers.last_pumped uses.
+--
+-- TWO changes:
+--   ADD COLUMN for_last_pumped TEXT to reminder_log.
+--   ADD COLUMN for_visit_id TEXT to reminder_log.
+--
+-- Nullable, no default, no backfill. They hold the customer's last_pumped and
+-- driving visit_id AT THE MOMENT THE ROW WAS WRITTEN - the occasion this reminder
+-- was sent about. Every writer stamps them through occasionStamp() in
+-- src/lib/reminders.js.
+--
+-- These columns are what the repeat guard in worker/lib/reminder_send.js is
+-- anchored to. The guard used to measure clock distance ("this rung already went
+-- out within 30 days of its window opening"), and a clock distance cannot answer
+-- the question the guard is actually asking, which is "is this the SAME PUMPING
+-- I already mailed about". It failed in both directions at once:
+--
+--   - Correcting last_pumped forward by more than the allowance moved the due
+--     date, and with it the window, past the prior send. The rung re-opened and
+--     the homeowner got a second pre-due email for one pumping. Corrections that
+--     big are ordinary in setup week, when an owner is fixing dates transcribed
+--     from a paper book.
+--   - On a one-month cycle (a grease trap; CustomerCard.jsx allows min="1") the
+--     allowance was as wide as the whole cycle, so the previous cycle's send
+--     landed inside the next cycle's bound and every other genuine reminder was
+--     silently suppressed. That customer was simply never told.
+--
+-- With the occasion recorded on the row there is no allowance to tune and no
+-- time horizon at all: a prior row suppresses today's rung when its
+-- occasion matches the customer's current state (via visit identity or half-cycle
+-- net change). A typo correction moves that date by days; a real pumping moves
+-- it by roughly a whole cycle.
+--
+-- A prior row with NULL in both fields is read as SUPPRESSING - on unknown data
+-- the safe answer is silence, never a second email to a homeowner.
+--
+-- No re-run guard: an ALTER TABLE ADD COLUMN applied twice fails loudly with
+-- "duplicate column name", which is the right outcome (the same reason 0002 and
+-- 0003 have no guard statement - see 0002's header). Do not add IF NOT EXISTS
+-- or any conditional wrapper.
+
+ALTER TABLE reminder_log ADD COLUMN for_last_pumped TEXT;
+ALTER TABLE reminder_log ADD COLUMN for_visit_id TEXT;

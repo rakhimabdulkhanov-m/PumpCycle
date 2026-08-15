@@ -1,4 +1,114 @@
-import { nextDue, isCommercial, startOfDay } from './dates.js'
+import { daysBetween, nextDue, isCommercial, startOfDay, toISODate } from './dates.js'
+
+// The OCCASION a reminder is about: the pumping it follows.
+//
+// Every reminder_log row records the customer's last_pumped and driving visit_id
+// as they stood when the row was written (reminder_log.for_last_pumped and
+// reminder_log.for_visit_id, migration 0004). All four writers (the cron
+// claim, the manual mark-sent, the Fix-button replacement row, and the setup-week
+// import) stamp through occasionStamp, because the same rule written in two
+// places with one copy updated is this project's most expensive recurring bug.
+//
+// A date this code cannot read is not a date. '' and null both mean "no occasion
+// recorded"; see sameOccasion for what a reader does with that.
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/
+
+export function occasionStamp(lastPumpedOrObject, visitId = null) {
+  if (lastPumpedOrObject && typeof lastPumpedOrObject === 'object') {
+    const rawLp =
+      lastPumpedOrObject.forLastPumped ??
+      lastPumpedOrObject.lastPumped ??
+      lastPumpedOrObject.for_last_pumped ??
+      lastPumpedOrObject.last_pumped
+    const rawVid =
+      lastPumpedOrObject.forVisitId ??
+      lastPumpedOrObject.visitId ??
+      lastPumpedOrObject.for_visit_id ??
+      lastPumpedOrObject.latestVisitId
+    const lp = typeof rawLp === 'string' && ISO_DAY.test(rawLp) ? rawLp : null
+    const vid = typeof rawVid === 'string' && rawVid.trim() !== '' ? rawVid : null
+    return { forLastPumped: lp, forVisitId: vid }
+  }
+  const lp = typeof lastPumpedOrObject === 'string' && ISO_DAY.test(lastPumpedOrObject) ? lastPumpedOrObject : null
+  const vid = typeof visitId === 'string' && visitId.trim() !== '' ? visitId : null
+  return { forLastPumped: lp, forVisitId: vid }
+}
+
+// Does a reminder already sent for `prior` belong to the same occasion
+// as the one `customer` is standing in today?
+//
+// An occasion is THE RECORDED PUMPING that started the current cycle. A rung
+// is SUPPRESSED when a prior row for the same (customer_id, reminder_key) belongs
+// to the SAME occasion.
+//
+// Two signals, and a new occasion exists if EITHER fires:
+//
+// (a) THE VISIT, exact. If the customer's latest visit is newer than the visit
+//     the prior reminder row was sent for, that is a new occasion.
+// (b) THE HALF-CYCLE NET, heuristic. If `last_pumped` moved FORWARD by at least
+//     half the customer's cycle length since the prior row's `for_last_pumped`,
+//     that is a new occasion.
+//
+// A missing or unreadable stamp answers TRUE - same occasion, suppress. Rows
+// with NULL in both fields predate migration 0004 and cannot be interpreted;
+// on unknown data the safe answer is silence, never a second email to a homeowner.
+export function sameOccasion(prior, customer, latestVisit = null) {
+  let priorLp = null
+  let priorVid = null
+  if (typeof prior === 'string') {
+    priorLp = ISO_DAY.test(prior) ? prior : null
+  } else if (prior && typeof prior === 'object') {
+    const rawLp = prior.for_last_pumped ?? prior.forLastPumped ?? prior.last_pumped ?? prior.lastPumped
+    const rawVid = prior.for_visit_id ?? prior.forVisitId ?? prior.visit_id ?? prior.visitId
+    priorLp = typeof rawLp === 'string' && ISO_DAY.test(rawLp) ? rawLp : null
+    priorVid = typeof rawVid === 'string' && rawVid.trim() !== '' ? rawVid : null
+  }
+
+  // Unknown data in both fields suppresses
+  if (!priorLp && !priorVid) return true
+
+  const currentLp = typeof customer?.lastPumped === 'string' && ISO_DAY.test(customer.lastPumped)
+    ? customer.lastPumped
+    : (typeof customer?.last_pumped === 'string' && ISO_DAY.test(customer.last_pumped) ? customer.last_pumped : null)
+  if (!currentLp) return true
+
+  const due = nextDue(customer)
+  if (!due) return true
+  const cycleDays = daysBetween(currentLp, toISODate(due))
+  if (cycleDays <= 0) return true
+
+  // Resolve current visit
+  const curVisit = latestVisit ?? customer?.latestVisit ?? null
+  const curVisitId = typeof curVisit === 'string'
+    ? curVisit
+    : (curVisit?.id ?? customer?.latestVisitId ?? customer?.latest_visit_id ?? null)
+  const curVisitDate = curVisit && typeof curVisit === 'object'
+    ? (curVisit.visitedOn ?? curVisit.visited_on ?? null)
+    : null
+
+  // Signal (a): THE VISIT, exact.
+  if (curVisitId) {
+    if (priorVid) {
+      if (curVisitId !== priorVid) {
+        return false // A newer visit exists -> NEW OCCASION
+      }
+    } else if (priorLp) {
+      if (curVisitDate && curVisitDate > priorLp) {
+        return false // NEW OCCASION
+      }
+    }
+  }
+
+  // Signal (b): THE HALF-CYCLE NET, heuristic.
+  if (priorLp) {
+    const forwardDays = daysBetween(priorLp, currentLp)
+    if (forwardDays > 0 && forwardDays * 2 >= cycleDays) {
+      return false // NEW OCCASION
+    }
+  }
+
+  return true
+}
 
 // Days past the due date at which an overdue nudge goes out.
 //

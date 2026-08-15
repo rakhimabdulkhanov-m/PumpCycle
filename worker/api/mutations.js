@@ -5,6 +5,7 @@ import { STALE_CLAIM_MS } from '../lib/reminder_send.js'
 import { isDifferentAddress } from '../../src/lib/location.js'
 import { isDifferentEmail } from '../../src/lib/email.js'
 import { hasLocation } from '../../src/lib/point.js'
+import { occasionStamp } from '../../src/lib/reminders.js'
 
 const MAX_BODY_BYTES = 32 * 1024
 const TYPES = new Set([
@@ -295,8 +296,8 @@ async function updateCustomer(db, envelope, now, actorUserId) {
   // Clearing email_status alone changes nothing, for two independent reasons:
   // the bounced row still holds (customer, rung, cycle, channel) in the
   // uniqueness index, so claimReminder's ON CONFLICT DO NOTHING can never win a
-  // fresh claim for this cycle; and runTenantReminders filters recently
-  // 'bounced'/'complained' rungs out of its candidates for 30 days. Without
+  // fresh claim for this cycle; and runTenantReminders' repeat guard filters
+  // out any rung already sent for this pumping, bounced ones included. Without
   // this the operator corrects the address, watches the red warning disappear,
   // and the customer still receives nothing - worse than the original bug,
   // because now he believes he fixed it.
@@ -348,13 +349,18 @@ async function updateCustomer(db, envelope, now, actorUserId) {
   // to precede the insert: the uniqueness index is the thing being freed.
   //
   // claimed_at is stamped one second past the reaper's staleness cutoff, not 0.
-  // Both are "reap me now", but 0 is also outside every window the sender
-  // measures: its 30-day repeat guard compares COALESCE(sent_at, claimed_at),
-  // and a row at the epoch falls out of it entirely. That is how a corrected
-  // address plus a same-afternoon cycle_seq bump produced two identical emails -
-  // the re-opened row retried at the old cycle_seq while a fresh claim won at
-  // the new one. STALE_CLAIM_MS is imported rather than restated so the two
-  // cannot drift apart.
+  // Both read as "reap me now", and the reaper is the only thing that reads this
+  // moment now that the repeat guard is anchored to the occasion rather than to
+  // the clock - but a row claiming to have been claimed at the epoch is a lie
+  // that every future reader of this table would have to work around.
+  // STALE_CLAIM_MS is imported rather than restated so the two cannot drift
+  // apart.
+  //
+  // What keeps this row from becoming a second email is for_last_pumped below:
+  // it names the same occasion as the row it replaces, so a same-afternoon
+  // cycle_seq bump cannot win a fresh claim beside it. That pair - the re-opened
+  // row retrying at the old cycle_seq while a fresh claim won at the new one -
+  // is how a corrected address once produced two identical emails.
   //
   // reported_at starts NULL. Carrying it over meant that if this second attempt
   // also failed, the new row was 'failed' with reported_at already set, and
@@ -369,6 +375,7 @@ async function updateCustomer(db, envelope, now, actorUserId) {
   const requeues = reopen.flatMap((row, index) => {
     const replacementId = `${envelope.mutationId}:requeue:${index}`
     const before = { ...projectReminder(row), reportedAt: row.reported_at ?? null }
+    const occasion = occasionStamp(row.for_last_pumped, row.for_visit_id)
     // The DELETE takes the bounce out of reminder_log, and reminder_log has no
     // archived_at - so mergeRows in src/lib/wire.js, which only drops rows
     // carrying archivedAt, leaves a browser that already synced the bounce
@@ -379,8 +386,9 @@ async function updateCustomer(db, envelope, now, actorUserId) {
       db.prepare(
         `INSERT INTO reminder_log
            (id, customer_id, reminder_key, cycle_seq, channel, provider, provider_message_id,
-            to_email, status, attempts, claimed_at, sent_at, error, reported_at, seq)
-         VALUES (?, ?, ?, ?, 'email', 'resend', '', ?, 'sending', 0, ?, NULL, '', NULL,
+            to_email, status, attempts, claimed_at, sent_at, error, reported_at,
+            for_last_pumped, for_visit_id, seq)
+         VALUES (?, ?, ?, ?, 'email', 'resend', '', ?, 'sending', 0, ?, NULL, '', NULL, ?, ?,
                  ${seqValue(seqCount, index + 1)})`
       ).bind(
         replacementId,
@@ -388,7 +396,13 @@ async function updateCustomer(db, envelope, now, actorUserId) {
         row.reminder_key,
         previous.cycle_seq,
         after.email,
-        claimedAt
+        claimedAt,
+        // The SAME occasion as the row being replaced - this is one attempt at
+        // one reminder about one pumping, and only the address changed. Copied
+        // rather than re-read from the customer so a replacement can never
+        // silently re-label itself as being about something newer.
+        occasion.forLastPumped,
+        occasion.forVisitId
       ),
       audit(db, now, actorUserId, 'reminder', row.id, 'reminder.requeued', before, {
         ...before,
@@ -576,6 +590,15 @@ async function markManualSent(db, envelope, now, actorUserId) {
   if ((p.reminderKey === 'sms') !== (p.channel === 'sms')) {
     throw new MutationError('payload reminder key and channel do not match')
   }
+  const latestVisit = await db
+    .prepare(
+      `SELECT id FROM visits
+       WHERE customer_id = ? AND sets_last_pumped = 1 AND archived_at IS NULL
+       ORDER BY visited_on DESC, created_at DESC LIMIT 1`
+    )
+    .bind(customerId)
+    .first()
+  const occasion = occasionStamp(current.last_pumped, latestVisit?.id)
   const reminderId = `${envelope.mutationId}:reminder`
   const reminder = {
     id: reminderId, customerId, reminderKey: p.reminderKey, cycleSeq: current.cycle_seq,
@@ -588,11 +611,16 @@ async function markManualSent(db, envelope, now, actorUserId) {
       db.prepare(
         `INSERT INTO reminder_log
          (id, customer_id, reminder_key, cycle_seq, channel, provider, to_email,
-          status, attempts, claimed_at, sent_at, seq)
-         VALUES (?, ?, ?, ?, ?, 'manual', ?, 'sent', 1, ?, ?, ${seqValue(1, 0)})`
+          status, attempts, claimed_at, sent_at, for_last_pumped, for_visit_id, seq)
+         VALUES (?, ?, ?, ?, ?, 'manual', ?, 'sent', 1, ?, ?, ?, ?, ${seqValue(1, 0)})`
       ).bind(
         reminderId, customerId, p.reminderKey, current.cycle_seq, p.channel,
-        p.channel === 'email' ? current.email : '', now, now
+        p.channel === 'email' ? current.email : '', now, now,
+        // The occasion this rung was marked sent for, through the one function
+        // every writer of this table uses. Without it the cron cannot tell the
+        // operator's own send apart from a duplicate it owes the customer.
+        occasion.forLastPumped,
+        occasion.forVisitId
       ),
       audit(db, now, actorUserId, 'reminder', reminderId, envelope.type, null, reminder),
       applied(db, envelope, now, actorUserId, result),

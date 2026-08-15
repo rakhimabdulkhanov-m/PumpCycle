@@ -380,13 +380,20 @@ describe('the double-send guard', () => {
 
   it('treats a genuinely new cycle as a new reminder', async () => {
     // After a real pumping the customer is legitimately due again, and the
-    // guard must not become a permanent block. A new cycle is a whole cycle
-    // away - far outside the 30-day repeat-suppression window, which is what
-    // separates it from an edit. The same instant would be suppressed; see
-    // "an ordinary customer edit cannot re-open a sent reminder" below.
+    // guard must not become a permanent block. An early pumping (3 months on a
+    // 36-month cycle) is under the half-cycle distance net, but recording the visit
+    // stamps the new occasion (signal a) so the new cycle is not suppressed.
     const id = await addCustomer({ lastPumped: '2023-08-14', cycleSeq: 0 })
     await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET })
     expect(sentRequests).toHaveLength(1)
+
+    await db()
+      .prepare(
+        `INSERT INTO visits (id, customer_id, visited_on, sets_last_pumped, created_at, seq)
+         VALUES ('v-early', ?, '2023-11-14', 1, ?, 99)`
+      )
+      .bind(id, Date.parse('2023-11-14T12:00:00Z'))
+      .run()
 
     await db()
       .prepare('UPDATE customers SET cycle_seq = 1, last_pumped = ? WHERE id = ?')
@@ -780,18 +787,27 @@ describe('an ordinary customer edit cannot re-open a sent reminder', () => {
   })
 
   it('allows the rung again a full cycle later', async () => {
-    // The guard must not become a permanent block.
-    const id = await addCustomer({ lastPumped: '2023-08-14' })
+    // The guard must not become a permanent block: after a genuine pumping a full
+    // cycle later, the new occasion allows the rung to send again.
+    const id = await addCustomer({ lastPumped: '2020-08-14' })
     await db()
       .prepare(
         `INSERT INTO reminder_log (id, customer_id, reminder_key, cycle_seq, channel, provider,
-                                   to_email, status, claimed_at, sent_at, seq)
-         VALUES ('old-row', ?, 'pre', 0, 'email', 'resend', 'dale@example.com', 'sent', 1, ?, 97)`
+                                   to_email, status, claimed_at, sent_at, for_last_pumped, seq)
+         VALUES ('old-row', ?, 'pre', 0, 'email', 'resend', 'dale@example.com', 'sent', 1, ?, '2020-08-14', 97)`
       )
       .bind(id, NINE_AM_ET - 200 * 24 * 60 * 60 * 1000)
       .run()
 
-    await db().prepare('UPDATE customers SET cycle_seq = 1 WHERE id = ?').bind(id).run()
+    await db()
+      .prepare(
+        `INSERT INTO visits (id, customer_id, visited_on, sets_last_pumped, created_at, seq)
+         VALUES ('v-next', ?, '2023-08-14', 1, ?, 98)`
+      )
+      .bind(id, Date.parse('2023-08-14T12:00:00Z'))
+      .run()
+
+    await db().prepare("UPDATE customers SET cycle_seq = 1, last_pumped = '2023-08-14' WHERE id = ?").bind(id).run()
     const result = await runTenantReminders(tenant(), KEYED, { now: NINE_AM_ET })
     expect(result.sent).toBe(1)
   })
@@ -1253,3 +1269,430 @@ describe('the tenant calendar comes from deploy config', () => {
     expect(await jobRows()).toHaveLength(1)
   })
 })
+
+// ---------------------------------------------------------------------------
+// Adversarial repeat-suppression matrix
+// ---------------------------------------------------------------------------
+
+describe('adversarial repeat-suppression matrix', () => {
+  it('A1: residential 36-month pre-due: cycle_seq bumped at day 1, 30, 59, 60 (due date), and guard bound (windowOpensAt - 30d)', async () => {
+    // Due 2026-08-15 on 36-month cycle. Pre-due window is 60 days wide: opens 2026-06-16, closes on due date 2026-08-15.
+    // Case 1: bump on day 1 (2026-06-17)
+    const c1 = await addCustomer({ email: 'a1_d1@example.com', lastPumped: '2023-08-15' })
+    // Case 2: bump on day 30 (2026-07-16)
+    const c2 = await addCustomer({ email: 'a1_d30@example.com', lastPumped: '2023-08-15' })
+    // Case 3: bump on day 59 (2026-08-14)
+    const c3 = await addCustomer({ email: 'a1_d59@example.com', lastPumped: '2023-08-15' })
+    // Case 4: bump on day 60 / due date (2026-08-15)
+    const c4 = await addCustomer({ email: 'a1_d60@example.com', lastPumped: '2023-08-15' })
+
+    // Day 0 (2026-06-16): pre-due send goes out to all four
+    const t0 = nineAmETOn('2026-06-16')
+    await runTenantReminders(tenant(), KEYED, { now: t0 })
+    await pinSends(t0)
+
+    // Bump day 1
+    await db().prepare("UPDATE customers SET name = 'Dale 1', cycle_seq = cycle_seq + 1 WHERE id = ?").bind(c1).run()
+
+    for (let d = 1; d <= 60; d++) {
+      const date = shiftISO('2026-06-16', d)
+      if (date === '2026-07-16') {
+        // Day 30 bump
+        await db().prepare("UPDATE customers SET name = 'Dale 30', cycle_seq = cycle_seq + 1 WHERE id = ?").bind(c2).run()
+      }
+      if (date === '2026-08-14') {
+        // Day 59 bump
+        await db().prepare("UPDATE customers SET name = 'Dale 59', cycle_seq = cycle_seq + 1 WHERE id = ?").bind(c3).run()
+      }
+      if (date === '2026-08-15') {
+        // Day 60 / due date bump
+        await db().prepare("UPDATE customers SET name = 'Dale 60', cycle_seq = cycle_seq + 1 WHERE id = ?").bind(c4).run()
+      }
+      const at = nineAmETOn(date)
+      await runTenantReminders(tenant(), KEYED, { now: at })
+      await pinSends(at)
+    }
+
+    // Case 5: bump on the day the guard's own bound falls on (windowOpensAt - 30 days)
+    // Send on 2026-06-16. Edit last_pumped to 2023-09-14 so new due date is 2026-09-14, new window opens 2026-07-16 (30 days after send).
+    const c5 = await addCustomer({ email: 'a1_bound@example.com', lastPumped: '2023-08-15' })
+    const t5 = nineAmETOn('2026-06-16')
+    await runTenantReminders(tenant(), KEYED, { now: t5 })
+    await pinSends(t5)
+    await db().prepare("UPDATE customers SET last_pumped = '2023-09-14', cycle_seq = cycle_seq + 1 WHERE id = ?").bind(c5).run()
+
+    for (let d = 0; d <= 60; d++) {
+      const date = shiftISO('2026-07-16', d)
+      const at = nineAmETOn(date)
+      await runTenantReminders(tenant(), KEYED, { now: at })
+      await pinSends(at)
+    }
+
+    const counts = sentCounts()
+    expect(counts['a1_d1@example.com']).toBe(1)
+    expect(counts['a1_d30@example.com']).toBe(1)
+    expect(counts['a1_d59@example.com']).toBe(1)
+    expect(counts['a1_d60@example.com']).toBe(1)
+    expect(counts['a1_bound@example.com']).toBe(1)
+  }, 120_000)
+
+  it('A2: last_pumped corrected after pre-due send, forwards and backwards by 1, 15, 45, 90 days', async () => {
+    // Pre-due window opened 2026-06-16 (due 2026-08-15). Sent on 2026-06-16.
+    const offsets = [-90, -45, -15, -1, 1, 15, 45, 90]
+    const ids = {}
+    for (const off of offsets) {
+      const key = `off_${off >= 0 ? 'p' : 'm'}${Math.abs(off)}`
+      ids[key] = await addCustomer({ email: `${key}@example.com`, lastPumped: '2023-08-15' })
+    }
+
+    // Send pre-due on 2026-06-16
+    const t0 = nineAmETOn('2026-06-16')
+    await runTenantReminders(tenant(), KEYED, { now: t0 })
+    await pinSends(t0)
+
+    // Day 1 after send (2026-06-17): apply the corrections
+    for (const off of offsets) {
+      const key = `off_${off >= 0 ? 'p' : 'm'}${Math.abs(off)}`
+      const newLastPumped = shiftISO('2023-08-15', off)
+      await db()
+        .prepare('UPDATE customers SET last_pumped = ?, cycle_seq = cycle_seq + 1 WHERE id = ?')
+        .bind(newLastPumped, ids[key])
+        .run()
+    }
+
+    // Run sender for 60 days after the correction (2026-06-17 to 2026-08-16)
+    for (let d = 1; d <= 60; d++) {
+      const date = shiftISO('2026-06-16', d)
+      const at = nineAmETOn(date)
+      await runTenantReminders(tenant(), KEYED, { now: at })
+      await pinSends(at)
+    }
+
+    const counts = sentCounts()
+    // Exactly 1 email total expected for each case (no duplicates for the same occasion)
+    for (const off of offsets) {
+      const key = `off_${off >= 0 ? 'p' : 'm'}${Math.abs(off)}`
+      expect(counts[`${key}@example.com`]).toBe(1)
+    }
+  }, 120_000)
+
+  it('A3: cycle_months changed after a send: 36 -> 12, 36 -> 3, 3 -> 36', async () => {
+    // 36 -> 12: due 2026-08-15, pre-due sent 2026-06-16
+    const c36_12 = await addCustomer({ email: 'c36_12@example.com', lastPumped: '2023-08-15', cycleMonths: 36 })
+    // 36 -> 3: due 2026-08-15, pre-due sent 2026-06-16
+    const c36_3 = await addCustomer({ email: 'c36_3@example.com', lastPumped: '2023-08-15', cycleMonths: 36 })
+    // 3 -> 36: due 2026-06-25, commercial lead 15 days, window opens 2026-06-10
+    const c3_36 = await addCustomer({ email: 'c3_36@example.com', lastPumped: '2026-03-25', cycleMonths: 3 })
+
+    // Send pre-due for 3-month customer on 2026-06-10
+    const t_comm = nineAmETOn('2026-06-10')
+    await runTenantReminders(tenant(), KEYED, { now: t_comm })
+    await pinSends(t_comm)
+
+    // Edit 3 -> 36 on 2026-06-11
+    await db().prepare('UPDATE customers SET cycle_months = 36, cycle_seq = cycle_seq + 1 WHERE id = ?').bind(c3_36).run()
+
+    // Send pre-due for 36-month customers on 2026-06-16
+    const t_res = nineAmETOn('2026-06-16')
+    await runTenantReminders(tenant(), KEYED, { now: t_res })
+    await pinSends(t_res)
+
+    // Edit 36 -> 12 and 36 -> 3 on 2026-06-17
+    await db().prepare('UPDATE customers SET cycle_months = 12, cycle_seq = cycle_seq + 1 WHERE id = ?').bind(c36_12).run()
+    await db().prepare('UPDATE customers SET cycle_months = 3, cycle_seq = cycle_seq + 1 WHERE id = ?').bind(c36_3).run()
+
+    // Run sender for 60 days after the residential send
+    for (let d = 1; d <= 60; d++) {
+      const date = shiftISO('2026-06-16', d)
+      const at = nineAmETOn(date)
+      await runTenantReminders(tenant(), KEYED, { now: at })
+      await pinSends(at)
+    }
+
+    const counts = sentCounts()
+    expect(counts['c36_12@example.com']).toBe(1)
+    expect(counts['c36_3@example.com']).toBe(1)
+    expect(counts['c3_36@example.com']).toBe(1)
+  }, 120_000)
+
+  it('A4: overdue rungs with overdue_reminders_enabled: od2 (+30..+89) and od3 (+90..+400)', async () => {
+    await setSettings({ overdue_reminders_enabled: '1' })
+
+    // Part 1: od2 rung (due 2026-05-15, od2 window opens at due + 30 days = 2026-06-14)
+    const c_od2 = await addCustomer({ email: 'od2_bump@example.com', lastPumped: '2023-05-15' })
+    // Send od2 on 2026-06-14
+    const t_od2 = nineAmETOn('2026-06-14')
+    await runTenantReminders(tenant(), KEYED, { now: t_od2 })
+    await pinSends(t_od2)
+    // First bump: day +30 (same day after send)
+    await db().prepare("UPDATE customers SET name = 'Bump od2 1', cycle_seq = cycle_seq + 1 WHERE id = ?").bind(c_od2).run()
+
+    // Sweep from day +30 (2026-06-14) to day +89 (2026-08-12)
+    for (let d = 31; d <= 89; d++) {
+      const date = shiftISO('2026-05-15', d)
+      if (d === 60) {
+        // Middle day bump
+        await db().prepare("UPDATE customers SET name = 'Bump od2 mid', cycle_seq = cycle_seq + 1 WHERE id = ?").bind(c_od2).run()
+      }
+      if (d === 89) {
+        // Day +89 bump
+        await db().prepare("UPDATE customers SET name = 'Bump od2 89', cycle_seq = cycle_seq + 1 WHERE id = ?").bind(c_od2).run()
+      }
+      const at = nineAmETOn(date)
+      await runTenantReminders(tenant(), KEYED, { now: at })
+      await pinSends(at)
+    }
+    expect(sentCounts()['od2_bump@example.com']).toBe(1)
+
+    // Archive c_od2 so its od3 does not fire during the od3 sweep below
+    await db().prepare('UPDATE customers SET archived_at = 1 WHERE id = ?').bind(c_od2).run()
+
+    // Part 2: od3 rung (due 2026-01-10, od3 window opens at due + 90 days = 2026-04-10)
+    const c_od3 = await addCustomer({ email: 'od3_bump@example.com', lastPumped: '2023-01-10' })
+    // Send od3 on 2026-04-10
+    const t_od3 = nineAmETOn('2026-04-10')
+    await runTenantReminders(tenant(), KEYED, { now: t_od3 })
+    await pinSends(t_od3)
+
+    // Sweep to day +400 (2027-02-14)
+    for (let d = 91; d <= 400; d += 5) {
+      const date = shiftISO('2026-01-10', d)
+      if (d === 150) {
+        await db().prepare("UPDATE customers SET name = 'Bump od3 150', cycle_seq = cycle_seq + 1 WHERE id = ?").bind(c_od3).run()
+      }
+      if (d === 200) {
+        await db().prepare("UPDATE customers SET name = 'Bump od3 200', cycle_seq = cycle_seq + 1 WHERE id = ?").bind(c_od3).run()
+      }
+      if (d === 400) {
+        await db().prepare("UPDATE customers SET name = 'Bump od3 400', cycle_seq = cycle_seq + 1 WHERE id = ?").bind(c_od3).run()
+      }
+      const at = nineAmETOn(date)
+      await runTenantReminders(tenant(), KEYED, { now: at })
+      await pinSends(at)
+    }
+
+    expect(sentCounts()['od3_bump@example.com']).toBe(1)
+  }, 120_000)
+
+  it('A5: clock sweeps 30, 60, and 150 days past the send in pre-due and overdue cases', async () => {
+    // Pre-due customer (A1 case): due 2026-10-14, window opens 2026-08-15
+    const c_pre = await addCustomer({ email: 'a5_pre@example.com', lastPumped: '2023-10-14' })
+    const t_pre = nineAmETOn('2026-08-15')
+    await runTenantReminders(tenant(), KEYED, { now: t_pre })
+    await pinSends(t_pre)
+    // Edit on day 1 after send
+    await db().prepare("UPDATE customers SET name = 'A5 Pre Bump', cycle_seq = cycle_seq + 1 WHERE id = ?").bind(c_pre).run()
+
+    // Sweep 30, 60, 150 days past the 2026-08-15 pre-due send
+    for (const daysPast of [30, 60, 150]) {
+      const date = shiftISO('2026-08-15', daysPast)
+      const at = nineAmETOn(date)
+      await runTenantReminders(tenant(), KEYED, { now: at })
+      await pinSends(at)
+    }
+
+    // Overdue od3 customer (A4 case): due 2026-01-10, od3 opens 2026-04-10 (due + 90)
+    await setSettings({ overdue_reminders_enabled: '1' })
+    const c_od3 = await addCustomer({ email: 'a5_od3@example.com', lastPumped: '2023-01-10' })
+    const t_od3 = nineAmETOn('2026-04-10')
+    await runTenantReminders(tenant(), KEYED, { now: t_od3 })
+    await pinSends(t_od3)
+    // Edit on day 1 after send
+    await db().prepare("UPDATE customers SET name = 'A5 OD3 Bump', cycle_seq = cycle_seq + 1 WHERE id = ?").bind(c_od3).run()
+
+    // Sweep 30, 60, 150 days past the 2026-04-10 od3 send
+    for (const daysPast of [30, 60, 150]) {
+      const date = shiftISO('2026-04-10', daysPast)
+      const at = nineAmETOn(date)
+      await runTenantReminders(tenant(), KEYED, { now: at })
+      await pinSends(at)
+    }
+
+    const counts = sentCounts()
+    expect(counts['a5_pre@example.com']).toBe(1)
+    expect(counts['a5_od3@example.com']).toBe(1)
+  }, 30_000)
+
+  it('A6: lookback derivation sees 400-day-old od3 row alongside today pre-due opening in one run', async () => {
+    await setSettings({ overdue_reminders_enabled: '1' })
+
+    // Customer 1: pre-due window opens today (2026-06-15), due 2026-08-14
+    await addCustomer({ email: 'fresh_a6@example.com', lastPumped: '2023-08-14', cycleSeq: 0 })
+
+    // Customer 2: od3 window opened ~400 days ago (due 2025-02-05, od3 send date 2025-05-06 = 405 days before 2026-06-15)
+    // Already emailed on 2025-05-06, and cycle_seq since bumped
+    const c_old = await addCustomer({ email: 'old_a6@example.com', lastPumped: '2022-02-05', cycleSeq: 1 })
+    await logRow({
+      customerId: c_old,
+      key: 'od3',
+      cycleSeq: 0,
+      status: 'sent',
+      sentAt: Date.parse('2025-05-06T13:00:00Z'),
+      toEmail: 'old_a6@example.com',
+    })
+
+    const t_run = nineAmETOn('2026-06-15')
+    const result = await runTenantReminders(tenant(), KEYED, { now: t_run })
+    await pinSends(t_run)
+
+    const counts = sentCounts()
+    expect(counts['fresh_a6@example.com']).toBe(1)
+    expect(counts['old_a6@example.com'] || 0).toBe(0)
+    expect(result.sent).toBe(1)
+  })
+
+  it('B1: commercial cycleMonths = 3 across three consecutive real cycles sends 1 pre-due email per cycle (3 total)', async () => {
+    const id = await addCustomer({ email: 'comm3@example.com', lastPumped: '2026-01-10', cycleMonths: 3, cycleSeq: 0 })
+
+    // Cycle 1: due 2026-04-10, window opens 2026-03-26 (15-day lead)
+    const t1 = nineAmETOn('2026-03-26')
+    await runTenantReminders(tenant(), KEYED, { now: t1 })
+    await pinSends(t1)
+
+    // Real pumping on 2026-04-10
+    await db().prepare("UPDATE customers SET last_pumped = '2026-04-10', cycle_seq = 1 WHERE id = ?").bind(id).run()
+
+    // Cycle 2: due 2026-07-10, window opens 2026-06-25
+    const t2 = nineAmETOn('2026-06-25')
+    await runTenantReminders(tenant(), KEYED, { now: t2 })
+    await pinSends(t2)
+
+    // Real pumping on 2026-07-10
+    await db().prepare("UPDATE customers SET last_pumped = '2026-07-10', cycle_seq = 2 WHERE id = ?").bind(id).run()
+
+    // Cycle 3: due 2026-10-10, window opens 2026-09-25
+    const t3 = nineAmETOn('2026-09-25')
+    await runTenantReminders(tenant(), KEYED, { now: t3 })
+    await pinSends(t3)
+
+    expect(sentCounts()['comm3@example.com']).toBe(3)
+  })
+
+  it('B2: commercial cycleMonths = 1 across three consecutive real cycles (expect 1 email per cycle, 3 total)', async () => {
+    const id = await addCustomer({ email: 'comm1@example.com', lastPumped: '2026-01-01', cycleMonths: 1, cycleSeq: 0 })
+
+    // Cycle 1: due 2026-02-01, window opens 2026-01-17 (15-day lead)
+    const t1 = nineAmETOn('2026-01-17')
+    await runTenantReminders(tenant(), KEYED, { now: t1 })
+    await pinSends(t1)
+
+    // Real pumping on 2026-02-01
+    await db().prepare("UPDATE customers SET last_pumped = '2026-02-01', cycle_seq = 1 WHERE id = ?").bind(id).run()
+
+    // Cycle 2: due 2026-03-01, window opens 2026-02-14
+    const t2 = nineAmETOn('2026-02-14')
+    await runTenantReminders(tenant(), KEYED, { now: t2 })
+    await pinSends(t2)
+
+    // Real pumping on 2026-03-01
+    await db().prepare("UPDATE customers SET last_pumped = '2026-03-01', cycle_seq = 2 WHERE id = ?").bind(id).run()
+
+    // Cycle 3: due 2026-04-01, window opens 2026-03-17
+    const t3 = nineAmETOn('2026-03-17')
+    await runTenantReminders(tenant(), KEYED, { now: t3 })
+    await pinSends(t3)
+
+    expect(sentCounts()['comm1@example.com']).toBe(3)
+  })
+
+  it('B2: commercial cycleMonths = 2 across three consecutive real cycles (expect 1 email per cycle, 3 total)', async () => {
+    const id = await addCustomer({ email: 'comm2@example.com', lastPumped: '2026-01-01', cycleMonths: 2, cycleSeq: 0 })
+
+    // Cycle 1: due 2026-03-01, window opens 2026-02-14 (15-day lead)
+    const t1 = nineAmETOn('2026-02-14')
+    await runTenantReminders(tenant(), KEYED, { now: t1 })
+    await pinSends(t1)
+
+    // Real pumping on 2026-03-01
+    await db().prepare("UPDATE customers SET last_pumped = '2026-03-01', cycle_seq = 1 WHERE id = ?").bind(id).run()
+
+    // Cycle 2: due 2026-05-01, window opens 2026-04-16
+    const t2 = nineAmETOn('2026-04-16')
+    await runTenantReminders(tenant(), KEYED, { now: t2 })
+    await pinSends(t2)
+
+    // Real pumping on 2026-05-01
+    await db().prepare("UPDATE customers SET last_pumped = '2026-05-01', cycle_seq = 2 WHERE id = ?").bind(id).run()
+
+    // Cycle 3: due 2026-07-01, window opens 2026-06-16
+    const t3 = nineAmETOn('2026-06-16')
+    await runTenantReminders(tenant(), KEYED, { now: t3 })
+    await pinSends(t3)
+
+    expect(sentCounts()['comm2@example.com']).toBe(3)
+  })
+
+  it('B3: customer cycleMonths edited 36 -> 3 shortly after pre-due send produces email on next genuine cycle', async () => {
+    const id = await addCustomer({ email: 'b3@example.com', lastPumped: '2023-08-15', cycleMonths: 36, cycleSeq: 0 })
+
+    // Pre-due send for 36mo residential on 2026-06-16 (due 2026-08-15)
+    const t1 = nineAmETOn('2026-06-16')
+    await runTenantReminders(tenant(), KEYED, { now: t1 })
+    await pinSends(t1)
+    expect(sentCounts()['b3@example.com']).toBe(1)
+
+    // Shortly after (2026-06-20), operator converts account to commercial 3mo and records pumping
+    await db()
+      .prepare("UPDATE customers SET last_pumped = '2026-06-20', cycle_months = 3, cycle_seq = cycle_seq + 1 WHERE id = ?")
+      .bind(id)
+      .run()
+
+    // Next genuine cycle: due 2026-09-20, commercial 15-day window opens 2026-09-05
+    const t2 = nineAmETOn('2026-09-05')
+    await runTenantReminders(tenant(), KEYED, { now: t2 })
+    await pinSends(t2)
+
+    expect(sentCounts()['b3@example.com']).toBe(2)
+  })
+
+  it('B4: overdue od1 fires across two consecutive commercial cycles with overdue enabled', async () => {
+    await setSettings({ overdue_reminders_enabled: '1' })
+    const id = await addCustomer({ email: 'b4@example.com', lastPumped: '2026-01-10', cycleMonths: 3, cycleSeq: 0 })
+
+    // Cycle 1: due 2026-04-10, commercial od1 (+3 days) is 2026-04-13
+    const t1 = nineAmETOn('2026-04-13')
+    await runTenantReminders(tenant(), KEYED, { now: t1 })
+    await pinSends(t1)
+
+    // Tank pumped on 2026-04-20
+    await db().prepare("UPDATE customers SET last_pumped = '2026-04-20', cycle_seq = 1 WHERE id = ?").bind(id).run()
+
+    // Cycle 2: due 2026-07-20, commercial od1 (+3 days) is 2026-07-23
+    const t2 = nineAmETOn('2026-07-23')
+    await runTenantReminders(tenant(), KEYED, { now: t2 })
+    await pinSends(t2)
+
+    expect(sentCounts()['b4@example.com']).toBe(2)
+    const rows = (await reminderRows()).filter((r) => r.customer_id === id)
+    expect(rows).toHaveLength(2)
+    expect(rows.every((r) => r.reminder_key === 'od1' && r.status === 'sent')).toBe(true)
+  })
+
+  it('C1: itemFromLogRow always produces valid finite windowOpensAt on rebuilt retry rows', async () => {
+    // Rebuilt pre-due row with open window
+    const c1 = await addCustomer({ lastPumped: '2023-08-15', email: 'c1_pre@example.com' })
+    await logRow({
+      customerId: c1,
+      key: 'pre',
+      status: 'sending',
+      claimedAt: nineAmETOn('2026-06-16') - 20 * 60 * 1000,
+      toEmail: 'c1_pre@example.com',
+    })
+    // Rebuilt overdue row with open overdue window
+    await setSettings({ overdue_reminders_enabled: '1' })
+    const c2 = await addCustomer({ lastPumped: '2023-05-15', email: 'c1_od@example.com' }) // due 2026-05-15, od2 open on 2026-06-16 (+32 days)
+    await logRow({
+      customerId: c2,
+      key: 'od2',
+      status: 'sending',
+      claimedAt: nineAmETOn('2026-06-16') - 20 * 60 * 1000,
+      toEmail: 'c1_od@example.com',
+    })
+
+    const result = await runTenantReminders(tenant(), KEYED, { now: nineAmETOn('2026-06-16') })
+    expect(result.sent).toBe(2)
+    expect(sentCounts()['c1_pre@example.com']).toBe(1)
+    expect(sentCounts()['c1_od@example.com']).toBe(1)
+  })
+})
+

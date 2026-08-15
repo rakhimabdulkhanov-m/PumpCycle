@@ -56,7 +56,9 @@ function migratedDb(tenantId = 'client-a') {
   db.exec('PRAGMA foreign_keys = ON;')
   db.exec(readFileSync(resolve(ROOT, 'migrations/0001_init.sql'), 'utf8'))
   db.exec(readFileSync(resolve(ROOT, 'migrations/0002_customers_us_box_and_address_stamp.sql'), 'utf8'))
-  db.prepare('INSERT INTO schema_meta (id, version, tenant_id, applied_at) VALUES (1, 2, ?, 0)').run(tenantId)
+  db.exec(readFileSync(resolve(ROOT, 'migrations/0003_reminder_log_reported_at.sql'), 'utf8'))
+  db.exec(readFileSync(resolve(ROOT, 'migrations/0004_reminder_log_for_last_pumped.sql'), 'utf8'))
+  db.prepare('INSERT INTO schema_meta (id, version, tenant_id, applied_at) VALUES (1, 4, ?, 0)').run(tenantId)
   return db
 }
 

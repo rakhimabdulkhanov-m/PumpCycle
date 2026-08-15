@@ -32,27 +32,28 @@ const WRANGLER = path.join(ROOT, 'wrangler.jsonc')
 // The recorded schema version
 // ---------------------------------------------------------------------------
 describe('migrations on disk', () => {
-  it('is 0001 then 0002 then 0003, in order', () => {
+  it('is 0001 then 0002 then 0003 then 0004, in order', () => {
     const found = scanMigrations(MIGRATIONS)
-    expect(found.map((m) => m.num)).toEqual([1, 2, 3])
+    expect(found.map((m) => m.num)).toEqual([1, 2, 3, 4])
     expect(found[0].name).toMatch(/^0001_/)
     expect(found[1].name).toMatch(/^0002_/)
     expect(found[2].name).toMatch(/^0003_/)
+    expect(found[3].name).toMatch(/^0004_/)
   })
 
   /**
    * migrate.mjs records `pending[pending.length - 1].num` and preflight.mjs
    * expects `highestMigrationNumber`. Both read this one function, and both
-   * numbers are asserted to be 3, so "the version a migration run writes" and
+   * numbers are asserted to be 4, so "the version a migration run writes" and
    * "the version a deploy demands" cannot drift apart.
    */
-  it('a full run records version 3, and a deploy expects version 3', () => {
+  it('a full run records version 4, and a deploy expects version 4', () => {
     const found = scanMigrations(MIGRATIONS)
     const versionAfterFullRun = found[found.length - 1].num // what migrate.mjs writes
     const versionPreflightExpects = highestMigrationNumber(MIGRATIONS)
 
-    expect(versionAfterFullRun).toBe(3)
-    expect(versionPreflightExpects).toBe(3)
+    expect(versionAfterFullRun).toBe(4)
+    expect(versionPreflightExpects).toBe(4)
     expect(versionAfterFullRun).toBe(versionPreflightExpects)
   })
 

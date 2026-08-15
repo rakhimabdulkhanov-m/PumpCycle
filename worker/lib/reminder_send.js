@@ -34,15 +34,21 @@ import { hasResendKey, sendEmail } from './resend.js'
 import { overdueEmail, preDueEmail } from './email_templates.js'
 import { sendOwnerDigest, sendOwnerWeekly } from './owner_digest.js'
 import { hourInZone, nextDue, startOfDay, todayISOInZone } from '../../src/lib/dates.js'
-import { PRE_DUE_KEY, overdueReminders, remindersFor } from '../../src/lib/reminders.js'
+import {
+  PRE_DUE_KEY,
+  occasionStamp,
+  overdueReminders,
+  remindersFor,
+  sameOccasion,
+} from '../../src/lib/reminders.js'
 
 /**
  * Rows claimed but not completed within this long are considered abandoned.
  *
  * Exported because worker/api/mutations.js has to hand the reaper a row that is
  * already stale. It stamps `now - STALE_CLAIM_MS - 1000` rather than a bare 0,
- * so the row is stale AND carries a meaningful recent moment for the repeat
- * guard below; duplicating the number there is how the two would drift.
+ * so the row reads as "reap me now" without also claiming to have been claimed
+ * at the epoch; duplicating the number there is how the two would drift.
  */
 export const STALE_CLAIM_MS = 15 * 60 * 1000
 
@@ -61,7 +67,7 @@ const EARLIEST_SEND_HOUR = 8
 const LATEST_SEND_HOUR = 18
 
 /**
- * How far a due date is allowed to move and still count as the SAME occasion.
+ * THE REPEAT GUARD: one rung, one occasion, one email.
  *
  * The uniqueness index is (customer_id, reminder_key, cycle_seq, channel), and
  * cycle_seq is NOT a pure cycle counter: an ordinary edit bumps it. Changing a
@@ -71,30 +77,56 @@ const LATEST_SEND_HOUR = 18
  * automatic sender that same reset silently frees the key, so something outside
  * the index has to decide whether the second send is a duplicate.
  *
- * The old rule was "not the same rung twice within 30 days of NOW", and it was
- * wrong in a way that mailed homeowners twice. A rung's guard has to be at least
- * as wide as that rung's own eligibility window, and every window here is wider
- * than 30 days: residential pre-due is 60 days, od2 is the newest earned rung
- * from +30 to +89, and od3 is the newest earned rung forever after +90. So a
- * cycle_seq bump anywhere inside a window re-opened that rung as soon as 30 days
- * had passed, and the customer was told a second time about a pumping date one
- * day different from the first. Measured over 150 simulated days: one edit, two
- * emails.
+ * Two rules were tried before this one, and both measured CLOCK DISTANCE. First
+ * "not the same rung twice within 30 days of now", then "not the same rung twice
+ * within 30 days of the day its own window opened". A clock distance cannot
+ * answer the question being asked, which is not "how long ago" but "was that the
+ * SAME PUMPING", and it broke in both directions at once:
  *
- * So the guard is anchored to the RUNG'S OWN WINDOW instead of to the clock:
- * a rung is suppressed when it already went out at or after that window's
- * opening day, less this allowance. What the allowance buys is drift - an edit
- * moves a due date, and with it the window, by days or weeks, and a send made
- * for the pre-edit window must still suppress the post-edit one. A genuinely new
- * occasion moves the window by a whole cycle (90 days at the shortest), which is
- * far outside it.
+ *   - Correcting last_pumped FORWARD by more than the allowance moved the due
+ *     date, and with it the window, past the prior send. The rung re-opened and
+ *     the homeowner got a second pre-due email about one pumping. A 45-day
+ *     correction is ordinary in setup week, when an owner is fixing dates
+ *     transcribed out of a paper book.
+ *   - On a ONE-MONTH cycle - a grease trap, and CustomerCard.jsx allows min="1" -
+ *     the 30-day allowance was as wide as the entire cycle, so the previous
+ *     cycle's send landed on the next cycle's bound and every other genuine
+ *     reminder was silently suppressed. That customer was never told at all,
+ *     which is the failure nobody complains about and nobody sees.
  *
- * Because a candidate's window is by definition already open today, this bound
- * is never later than `now - 30 days`: the old 30-day rule survives inside the
- * new one as a floor. Different rungs remain unaffected, since the guard is
- * still per (customer, rung).
+ * Widening the allowance suppresses real sends; narrowing it duplicates. There
+ * is no number that fixes both, so the guard is not anchored to time at all.
+ *
+ * It is anchored to the OCCASION: every reminder_log row records the customer's
+ * last_pumped as it stood when the row was written (for_last_pumped, migration
+ * 0004), and a rung is suppressed when a prior row for the same (customer, rung)
+ * belongs to the same occasion - see sameOccasion in src/lib/reminders.js, which
+ * owns both halves of that rule. A typo correction moves last_pumped by days; a
+ * real pumping moves it by roughly a whole cycle. That is exactly the distinction
+ * both defects got wrong, and it holds at any cycle length and for any edit made
+ * anywhere inside a window.
+ *
+ * There is no lookback window here any more, which also closes od3's open
+ * question: od3 stays earned forever after +90 days, so no constant horizon could
+ * have covered a customer years overdue. The guard reads the rows of today's
+ * candidates whatever their age.
+ *
+ * 'sending' rows count, alongside 'sent'/'bounced'/'complained'. A row in flight
+ * is precisely one about to become a send; leaving it out is what let a corrected
+ * address plus a same-afternoon cycle_seq bump produce two emails - the re-opened
+ * row retried at the old cycle_seq while a fresh claim won at the new one, two
+ * log ids, two Resend idempotency keys, two emails. It cannot suppress an
+ * ordinary send made in the same run, because the guard is read BEFORE any claim
+ * in this run: the only 'sending' rows it can see belong to an earlier run, and
+ * those are either retries (never filtered by it) or rows this run has no
+ * business duplicating.
  */
-const REPEAT_SUPPRESSION_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * D1 accepts at most 100 bound parameters per statement, so the guard's
+ * customer-id list is asked in chunks rather than in one IN (...).
+ */
+const GUARD_ID_CHUNK = 90
 
 function newId(prefix) {
   return `${prefix}-${crypto.randomUUID()}`
@@ -183,11 +215,10 @@ export async function reapStaleClaims(db, now) {
  * drifting by the host's UTC offset.
  *
  * Both the fresh pass and the retry path ask this question, and they must get
- * the same answer, so they ask it here - and so does the repeat guard, which
- * needs the day the window OPENED and must not derive it a second way.
+ * the same answer, so they ask it here.
  *
- * @returns {{dueDate: Date, opensAt: Date}|null} null unless the window is open
- *   on `today`.
+ * @returns {Date|null} the due date, or null unless the window is open on
+ *   `today`.
  */
 function preDueWindow(customer, today) {
   const preDue = remindersFor(customer).find((r) => r.channel === 'Email')
@@ -195,7 +226,7 @@ function preDueWindow(customer, today) {
   const dueDate = nextDue(customer)
   const start = startOfDay(today)
   if (preDue.sendDate > start || dueDate < start) return null
-  return { dueDate, opensAt: preDue.sendDate }
+  return dueDate
 }
 
 /**
@@ -222,15 +253,14 @@ function itemFromLogRow(row, customer, today) {
     // open, the send failed, the address was corrected months later, and the
     // customer was mailed "your tank is due on Jan 10" in June. Same rule as
     // dueReminders, from the same function, so the two cannot disagree.
-    const window = preDueWindow(customer, today)
-    if (!window) return null
+    const dueDate = preDueWindow(customer, today)
+    if (!dueDate) return null
     return {
       customer,
       key: row.reminder_key,
       cycleSeq: row.cycle_seq,
       kind: 'pre',
-      dueDate: window.dueDate,
-      windowOpensAt: window.opensAt.getTime(),
+      dueDate,
       daysPastDue: 0,
       logId: row.id,
     }
@@ -248,7 +278,6 @@ function itemFromLogRow(row, customer, today) {
     kind: 'overdue',
     rung: row.reminder_key,
     dueDate: rung.dueDate,
-    windowOpensAt: rung.sendDate.getTime(),
     daysPastDue: rung.daysPastDue,
     logId: row.id,
   }
@@ -256,11 +285,6 @@ function itemFromLogRow(row, customer, today) {
 
 /**
  * Every reminder that has come due for this book today, before deduplication.
- *
- * Every item carries `windowOpensAt`, the moment its own rung became eligible:
- * the pre-due lead day, or the overdue rung's send date. The repeat guard needs
- * it (see REPEAT_SUPPRESSION_MS) and it comes from the same two functions that
- * decide eligibility, so the guard cannot disagree with the decision it guards.
  *
  * Deduplication is deliberately NOT done here. Only the database can settle
  * "has this already gone out" atomically against a concurrent invocation, and
@@ -279,15 +303,14 @@ export function dueReminders(customers, today, { overdueEnabled }) {
 
     // Pre-due: the one email rung per cycle, 60 days out residential / 15
     // commercial. See preDueWindow - the retry path asks the same function.
-    const window = preDueWindow(customer, today)
-    if (window) {
+    const dueDate = preDueWindow(customer, today)
+    if (dueDate) {
       due.push({
         customer,
         key: PRE_DUE_KEY,
         cycleSeq,
         kind: 'pre',
-        dueDate: window.dueDate,
-        windowOpensAt: window.opensAt.getTime(),
+        dueDate,
         daysPastDue: 0,
       })
     }
@@ -309,7 +332,6 @@ export function dueReminders(customers, today, { overdueEnabled }) {
         kind: 'overdue',
         rung: latest.key,
         dueDate: latest.dueDate,
-        windowOpensAt: latest.sendDate.getTime(),
         daysPastDue: latest.daysPastDue,
       })
     }
@@ -327,20 +349,48 @@ export function dueReminders(customers, today, { overdueEnabled }) {
  * insert owns the send and every other one conflicts and walks away. Two crons
  * racing in the same hour therefore produce one email, not two.
  *
+ * The row records the occasion it is being sent for - the customer's last_pumped
+ * as it stands right now - through occasionStamp, the one function all four
+ * writers of this table use. That stamp is what the repeat guard reads back; a
+ * row written without it can never be told apart from a duplicate.
+ *
  * @returns {Promise<string|null>} the reminder_log id if the claim was won.
  */
 export async function claimReminder(db, item, now, seq) {
   const id = newId('rl')
+  let latestVisitId = item.customer.latestVisit?.id || item.customer.latestVisitId || null
+  if (!latestVisitId) {
+    const latest = await db
+      .prepare(
+        `SELECT id FROM visits
+          WHERE customer_id = ? AND sets_last_pumped = 1 AND archived_at IS NULL
+          ORDER BY visited_on DESC, created_at DESC LIMIT 1`
+      )
+      .bind(item.customer.id)
+      .first()
+    latestVisitId = latest?.id || null
+  }
+  const occasion = occasionStamp(item.customer.lastPumped, latestVisitId)
   const inserted = await db
     .prepare(
       `INSERT INTO reminder_log
          (id, customer_id, reminder_key, cycle_seq, channel, provider, to_email,
-          status, attempts, claimed_at, seq)
-       VALUES (?, ?, ?, ?, 'email', 'resend', ?, 'sending', 1, ?, ?)
+          status, attempts, claimed_at, for_last_pumped, for_visit_id, seq)
+       VALUES (?, ?, ?, ?, 'email', 'resend', ?, 'sending', 1, ?, ?, ?, ?)
        ON CONFLICT (customer_id, reminder_key, cycle_seq, channel) DO NOTHING
        RETURNING id`
     )
-    .bind(id, item.customer.id, item.key, item.cycleSeq, item.customer.email, now, seq)
+    .bind(
+      id,
+      item.customer.id,
+      item.key,
+      item.cycleSeq,
+      item.customer.email,
+      now,
+      occasion.forLastPumped,
+      occasion.forVisitId,
+      seq
+    )
     .first()
 
   return inserted ? inserted.id : null
@@ -464,60 +514,75 @@ export async function runTenantReminders(tenant, env, { now = Date.now(), force 
   const owedRetry = new Set(retries.map((item) => item.customer.id))
 
   // What the calendar says is owed today. A pure decision, no database, so it
-  // can be made before the guard query and tell that query how far back to look.
+  // can be made before the guard query and tell that query whose rows to read.
   const earned = dueReminders(customers, today, {
     overdueEnabled: Boolean(settings.overdueRemindersEnabled),
   })
 
-  // When each rung already went out, whatever cycle_seq it was recorded under.
-  // See REPEAT_SUPPRESSION_MS: this is what stops an ordinary customer edit from
-  // re-opening a reminder the customer has already received.
+  // Which occasions each rung has already gone out for, whatever cycle_seq it
+  // was recorded under and however long ago. See the repeat-guard docblock at
+  // the top of this file: this is what stops an ordinary customer edit from
+  // re-opening a reminder the customer has already received, and what stops a
+  // one-month cycle from silencing every other genuine one.
   //
-  // The lookback is the oldest window any of today's candidates is standing in,
-  // less the drift allowance - not a fixed 30 days, which was shorter than the
-  // windows it was guarding and therefore let a bumped cycle_seq produce a
-  // duplicate the moment it lapsed. Derived from the candidates rather than
-  // fixed at some generous constant because od3's window has no far end at all:
-  // a customer years overdue would outlive any constant.
-  //
-  // 'sending' rows count, on COALESCE(sent_at, claimed_at). A row in flight has
-  // no sent_at at all, so on sent_at alone it fell out of the guard entirely -
-  // and an in-flight rung is precisely one that is about to become a send. That
-  // is what let a corrected address and a same-afternoon cycle_seq bump produce
-  // two emails: the re-opened row retried at the old cycle_seq while a fresh
-  // claim won at the new one, two log ids, two Resend idempotency keys, two
-  // emails. Widening this cannot suppress an ordinary send in the same run,
-  // because this map is computed BEFORE any claim in this run is made; the only
-  // 'sending' rows it can see belong to an earlier run, and those are retries
-  // (which are never filtered by it) or rows this run has no business
-  // duplicating.
-  const lookback = earned.reduce(
-    (oldest, item) => Math.min(oldest, item.windowOpensAt - REPEAT_SUPPRESSION_MS),
-    now - REPEAT_SUPPRESSION_MS
-  )
-  const recentRows = await db
-    .prepare(
-      `SELECT customer_id, reminder_key, MAX(COALESCE(sent_at, claimed_at)) AS last_at
-         FROM reminder_log
-        WHERE channel = 'email' AND status IN ('sent','bounced','complained','sending')
-          AND COALESCE(sent_at, claimed_at) >= ?
-        GROUP BY customer_id, reminder_key`
-    )
-    .bind(lookback)
-    .all()
-  const lastSentAt = new Map(
-    (recentRows.results || []).map((row) => [`${row.customer_id}:${row.reminder_key}`, row.last_at])
-  )
+  // Asked for today's candidates by id rather than over a time window: there is
+  // no horizon to pick (od3 stays earned forever), and a customer is only ever
+  // asked about on a morning something is owed to them.
+  const candidateIds = [...new Set(earned.map((item) => item.customer.id))]
+  const priorOccasions = new Map()
+  const latestVisits = new Map()
+  for (let at = 0; at < candidateIds.length; at += GUARD_ID_CHUNK) {
+    const chunk = candidateIds.slice(at, at + GUARD_ID_CHUNK)
+    const [logRes, visitRes] = await Promise.all([
+      db
+        .prepare(
+          `SELECT customer_id, reminder_key, for_last_pumped, for_visit_id
+             FROM reminder_log
+            WHERE channel = 'email' AND status IN ('sent','bounced','complained','sending')
+              AND customer_id IN (${chunk.map(() => '?').join(',')})`
+        )
+        .bind(...chunk)
+        .all(),
+      db
+        .prepare(
+          `SELECT id, customer_id, visited_on, created_at
+             FROM visits
+            WHERE archived_at IS NULL AND sets_last_pumped = 1
+              AND customer_id IN (${chunk.map(() => '?').join(',')})
+            ORDER BY visited_on DESC, created_at DESC`
+        )
+        .bind(...chunk)
+        .all(),
+    ])
+    for (const row of logRes.results || []) {
+      const key = `${row.customer_id}:${row.reminder_key}`
+      const entry = { for_last_pumped: row.for_last_pumped, for_visit_id: row.for_visit_id }
+      const stamps = priorOccasions.get(key)
+      if (stamps) stamps.push(entry)
+      else priorOccasions.set(key, [entry])
+    }
+    for (const row of visitRes.results || []) {
+      const existing = latestVisits.get(row.customer_id)
+      if (!existing || row.visited_on > existing.visited_on || (row.visited_on === existing.visited_on && row.created_at > existing.created_at)) {
+        latestVisits.set(row.customer_id, row)
+      }
+    }
+  }
+
+  for (const customer of customers) {
+    const v = latestVisits.get(customer.id)
+    if (v) customer.latestVisit = v
+  }
 
   const candidates = earned.filter((item) => {
     if (owedRetry.has(item.customer.id)) return false
-    const last = lastSentAt.get(`${item.customer.id}:${item.key}`)
-    if (last == null) return true
-    // Suppressed if this rung already went out for this occasion: at or after
-    // the day its window opened, less the drift an edit can move that day by.
-    // The window is open today, so this bound is never later than
-    // `now - REPEAT_SUPPRESSION_MS` - the old 30-day rule is the floor.
-    return last < item.windowOpensAt - REPEAT_SUPPRESSION_MS
+    const stamps = priorOccasions.get(`${item.customer.id}:${item.key}`) || []
+    const latestVisit = latestVisits.get(item.customer.id) || null
+    // Suppressed if ANY prior row for this rung was sent about the pumping this
+    // customer is standing in now. Several rows can exist for one rung once
+    // cycle_seq has moved, and one match is enough - the homeowner already has
+    // that email.
+    return !stamps.some((stamp) => sameOccasion(stamp, item.customer, latestVisit))
   })
 
   const cap = Number.isFinite(settings.maxSendsPerRun) && settings.maxSendsPerRun > 0

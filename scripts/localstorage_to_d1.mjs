@@ -13,7 +13,7 @@ import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isSanePoint } from '../src/lib/point.js'
-import { PRE_DUE_KEY, SMS_KEY } from '../src/lib/reminders.js'
+import { PRE_DUE_KEY, SMS_KEY, occasionStamp } from '../src/lib/reminders.js'
 import { channelForRungKey } from '../src/lib/reminderView.js'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -288,6 +288,7 @@ export function normalizeExport(parsed, { tenantId, sourceHash }) {
     const canonicalId = `${customerId}:${reminderKey}`
     // channelForRungKey is the canonical definition (src/lib/reminderView.js).
     const channel = channelForRungKey(reminderKey)
+    const occasion = occasionStamp(customer.lastPumped, null)
     const reminder = {
       id: `reminder-${sha256(`${tenantId}\0${canonicalId}`).slice(0, 32)}`,
       customerId,
@@ -295,6 +296,14 @@ export function normalizeExport(parsed, { tenantId, sourceHash }) {
       channel,
       toEmail: channel === 'sms' ? '' : customer.email,
       sentAt: Date.parse(`${sentDay}T12:00:00.000Z`),
+      // The pumping this manual reminder was about: the date the book was
+      // imported with. Stamped through the one function every writer of
+      // reminder_log uses, so the automatic sender can tell the owner's own
+      // send apart from one it still owes this customer. Without it every
+      // imported rung reads as "occasion unknown", which the guard treats as
+      // suppressing - the customer's next genuine reminder would be silent.
+      forLastPumped: occasion.forLastPumped,
+      forVisitId: occasion.forVisitId,
     }
     const entry = { reminder, sentDay }
     const existing = byCanonicalId.get(canonicalId)
@@ -416,8 +425,8 @@ export function generateSql(model) {
     const offset = model.customers.length + model.visits.length + index
     const seq = `(SELECT CAST(substr(note, 9) AS INTEGER) - ${totalSeqs - 1 - offset} FROM import_runs WHERE id = ${sqlText(model.runId)})`
     statements.push('',
-      `INSERT INTO reminder_log (id, customer_id, reminder_key, cycle_seq, channel, provider, provider_message_id, to_email, status, attempts, claimed_at, sent_at, error, seq)`,
-      `VALUES (${sqlText(reminder.id)}, ${sqlText(reminder.customerId)}, ${sqlText(reminder.reminderKey)}, 0, ${sqlText(reminder.channel)}, 'manual', '', ${sqlText(reminder.toEmail)}, 'sent', 1, ${reminder.sentAt}, ${reminder.sentAt}, '', ${seq})`,
+      `INSERT INTO reminder_log (id, customer_id, reminder_key, cycle_seq, channel, provider, provider_message_id, to_email, status, attempts, claimed_at, sent_at, error, for_last_pumped, for_visit_id, seq)`,
+      `VALUES (${sqlText(reminder.id)}, ${sqlText(reminder.customerId)}, ${sqlText(reminder.reminderKey)}, 0, ${sqlText(reminder.channel)}, 'manual', '', ${sqlText(reminder.toEmail)}, 'sent', 1, ${reminder.sentAt}, ${reminder.sentAt}, '', ${sqlNullable(reminder.forLastPumped)}, ${sqlNullable(reminder.forVisitId)}, ${seq})`,
       `ON CONFLICT(id) DO NOTHING;`)
   })
 
