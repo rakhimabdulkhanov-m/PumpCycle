@@ -77,6 +77,14 @@
       "database_id": "a8e4fbe3-fed7-4eea-8d58-3a928fc52634",
       "migrations_dir": "migrations"
     }
+  ],
+
+  // R2 photo buckets. One entry per live tenant.
+  "r2_buckets": [
+    {
+      "binding": "R2_DEV",
+      "bucket_name": "pumpcycle-dev-photos"
+    }
   ]
 
   // DEV_TENANT_HOST overrides the hostname used for tenant resolution. It is deliberately

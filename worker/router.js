@@ -6,6 +6,7 @@ import * as authApi from './api/auth.js'
 import * as sync from './api/sync.js'
 import * as mutations from './api/mutations.js'
 import * as webhooks from './api/webhooks.js'
+import * as photos from './api/photos.js'
 import { authenticateSession, originMatches } from './lib/auth.js'
 
 /**
@@ -44,6 +45,8 @@ const ROUTES = [
   { path: '/api/auth/logout', liveOnly: true, protected: true, unsafe: true, methods: { POST: authApi.logout } },
   { path: '/api/sync', liveOnly: true, protected: true, methods: { GET: sync.get } },
   { path: '/api/mutations', liveOnly: true, protected: true, unsafe: true, methods: { POST: mutations.post } },
+  { path: '/api/photos/upload', liveOnly: true, protected: true, unsafe: true, methods: { POST: photos.upload } },
+  { pattern: /^\/api\/photos\/[A-Za-z0-9._:-]+$/, liveOnly: true, protected: true, methods: { GET: photos.getPhoto } },
   // Resend delivery events. Deliberately NOT `protected` and NOT `unsafe`:
   // Resend holds no session cookie and sends no Origin header, so both checks
   // would reject every legitimate delivery. Its authentication is the Svix HMAC
@@ -64,7 +67,9 @@ export async function handleApi(request, env, ctx, url, tenant) {
     return json({ ok: false, error: 'tenant not configured' }, 503)
   }
 
-  const route = ROUTES.find((r) => r.path === url.pathname)
+  const route = ROUTES.find((r) =>
+    r.path ? r.path === url.pathname : r.pattern ? r.pattern.test(url.pathname) : false
+  )
   if (!route) {
     return json({ ok: false, error: 'not found' }, 404)
   }

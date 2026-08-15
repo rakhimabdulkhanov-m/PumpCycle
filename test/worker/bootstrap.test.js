@@ -18,32 +18,32 @@ const LIVE = 'app.pumpcycle.net'
 // Resolution
 // ---------------------------------------------------------------------------
 describe('app.pumpcycle.net resolves to a live tenant', () => {
-  it('is in LIVE_TENANTS, bound to DB_DEV, with no r2 and no sending addresses', () => {
+  it('is in LIVE_TENANTS, bound to DB_DEV and R2_DEV, with no sending addresses', () => {
     const cfg = LIVE_TENANTS[LIVE]
     expect(cfg).toBeDefined()
     expect(cfg.db).toBe('DB_DEV')
+    expect(cfg.r2).toBe('R2_DEV')
     expect(cfg.company).toBe('PumpCycle Dev')
     expect(cfg.timezone).toBe('America/New_York')
     // Resend does not exist yet. An address invented here is an address the reminder
     // sender would later try to send from.
     expect(cfg.fromEmail).toBeUndefined()
     expect(cfg.replyTo).toBeUndefined()
-    expect(cfg.r2).toBeUndefined()
   })
 
-  it('resolves live and hands back that host’s own database object', () => {
+  it('resolves live and hands back that host’s own database and r2 objects', () => {
     const t = resolveTenant(LIVE, env)
     expect(t.kind).toBe('live')
     expect(t.host).toBe(LIVE)
     // Identity, not truthiness: the request is served from the binding its host names.
     expect(t.db).toBe(env.DB_DEV)
-    expect(t.r2).toBeNull()
+    expect(t.r2).toBe(env.R2_DEV)
   })
 
   it('fails closed when the binding is missing from the deploy', () => {
     const t = resolveTenant(LIVE, {})
     expect(t.kind).toBe('misconfigured')
-    expect(t.missing).toEqual(['DB_DEV'])
+    expect(t.missing).toEqual(['DB_DEV', 'R2_DEV'])
     expect(t.db).toBeUndefined()
   })
 

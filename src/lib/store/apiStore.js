@@ -294,6 +294,10 @@ export function createApiStore(options = {}) {
     setPin: (customerId, point) => enqueue(envelope('pin.set', { customerId, ...point })),
     restorePin: (customerId, pin) => enqueue(envelope('pin.restore', { customerId, ...pin })),
     recordVisit: (visit) => enqueue(envelope('visit.record', visit)),
+    updateVisit: (visitId, changes) => enqueue(envelope('visit.update', { visitId, changes })),
+    archiveVisit: (visitId) => enqueue(envelope('visit.archive', { visitId })),
+    recordPhoto: (photo) => enqueue(envelope('photo.record', photo)),
+    archivePhoto: (photoId) => enqueue(envelope('photo.archive', { photoId })),
     correctLastPumped: (customerId, lastPumped, id = idFactory()) =>
       enqueue(envelope('last_pumped.correct', { id, customerId, lastPumped })),
     setAvgJobPrice: (avgJobPrice) => {

@@ -52,6 +52,7 @@ export const LIVE_TENANTS = {
    */
   'app.pumpcycle.net': {
     db: 'DB_DEV',
+    r2: 'R2_DEV',
     company: 'PumpCycle Dev',
     timezone: 'America/New_York',
   },

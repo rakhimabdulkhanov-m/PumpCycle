@@ -193,6 +193,11 @@ function App() {
     customerId,
     visitedOn: todayISO(),
   }), [])
+  const recordVisit = useCallback((visit) => store.recordVisit(visit), [])
+  const updateVisit = useCallback((visitId, changes) => store.updateVisit(visitId, changes), [])
+  const archiveVisit = useCallback((visitId) => store.archiveVisit(visitId), [])
+  const recordPhoto = useCallback((photo) => store.recordPhoto(photo), [])
+  const archivePhoto = useCallback((photoId) => store.archivePhoto(photoId), [])
 
   const addCustomer = useCallback(async (fields) => {
     // Strip the map-routing flags before persisting: they aren't customer data.
@@ -266,8 +271,15 @@ function App() {
         {tab === 'map' && (
           <MapTab
             customers={activeCustomers}
+            visits={data.visits || []}
+            photos={data.photos || []}
             onUpdateCustomer={updateCustomer}
             onMarkPumped={markPumped}
+            onRecordVisit={recordVisit}
+            onUpdateVisit={updateVisit}
+            onArchiveVisit={archiveVisit}
+            onRecordPhoto={recordPhoto}
+            onArchivePhoto={archivePhoto}
             onSetPin={setPin}
             onRestorePin={restorePin}
             onAddCustomer={addCustomer}
@@ -282,10 +294,17 @@ function App() {
         {tab === 'due' && (
           <DueTab
             customers={activeCustomers}
+            visits={data.visits || []}
+            photos={data.photos || []}
             settings={data.settings}
             sentReminders={data.sentReminders}
             onUpdateCustomer={updateCustomer}
             onMarkPumped={markPumped}
+            onRecordVisit={recordVisit}
+            onUpdateVisit={updateVisit}
+            onArchiveVisit={archiveVisit}
+            onRecordPhoto={recordPhoto}
+            onArchivePhoto={archivePhoto}
             onSetAvgJobPrice={setAvgJobPrice}
             onRequestAdd={() => setAddOpen(true)}
             onNavigateCustomer={navigateToCustomer}
@@ -296,6 +315,8 @@ function App() {
         {tab === 'reminders' && (
           <RemindersTab
             customers={activeCustomers}
+            visits={data.visits || []}
+            photos={data.photos || []}
             sentReminders={data.sentReminders}
             sentAt={data.sentAt}
             reminderLog={data.reminderLog}
@@ -303,6 +324,11 @@ function App() {
             onMarkSent={markReminderSent}
             onUpdateCustomer={updateCustomer}
             onMarkPumped={markPumped}
+            onRecordVisit={recordVisit}
+            onUpdateVisit={updateVisit}
+            onArchiveVisit={archiveVisit}
+            onRecordPhoto={recordPhoto}
+            onArchivePhoto={archivePhoto}
             onNavigateCustomer={navigateToCustomer}
           />
         )}

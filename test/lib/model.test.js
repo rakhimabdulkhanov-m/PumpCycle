@@ -141,6 +141,58 @@ describe('canonical model mutations', () => {
     }))
     expect(cleared.customers[0]).toMatchObject({ emailStatus: 'complained' })
   })
+
+  it('visit.update and visit.archive update visits array and recompute customer lastPumped date', () => {
+    const before = state()
+    before.visits = [
+      { id: 'v1', customerId: 'a', visitedOn: '2024-01-01', setsLastPumped: true, archivedAt: null },
+      { id: 'v2', customerId: 'a', visitedOn: '2025-06-01', setsLastPumped: true, archivedAt: null },
+    ]
+    before.customers[0].lastPumped = '2025-06-01'
+
+    // Update v2 date to 2025-07-01
+    const updated = applyMutation(before, mutation('visit.update', {
+      visitId: 'v2',
+      changes: { visitedOn: '2025-07-01', tech: 'Hank', notes: 'Checked baffle' },
+    }, 600))
+    expect(updated.visits.find((v) => v.id === 'v2')).toMatchObject({
+      visitedOn: '2025-07-01',
+      tech: 'Hank',
+      notes: 'Checked baffle',
+    })
+    expect(updated.customers[0].lastPumped).toBe('2025-07-01')
+
+    // Archive v2 -> should fall back to v1 date (2024-01-01)
+    const archived = applyMutation(updated, mutation('visit.archive', { visitId: 'v2' }, 700))
+    expect(archived.visits.find((v) => v.id === 'v2').archivedAt).toBe(700)
+    expect(archived.customers[0].lastPumped).toBe('2024-01-01')
+  })
+
+  it('photo.record and photo.archive update photos array properly', () => {
+    const before = state()
+    const recorded = applyMutation(before, mutation('photo.record', {
+      id: 'p1',
+      customerId: 'a',
+      visitId: 'v1',
+      r2Key: 'photos/a/p1.jpg',
+      caption: 'Lid under bush',
+      width: 1600,
+      height: 1200,
+      bytes: 450000,
+    }, 800))
+    expect(recorded.photos).toHaveLength(1)
+    expect(recorded.photos[0]).toMatchObject({
+      id: 'p1',
+      customerId: 'a',
+      visitId: 'v1',
+      caption: 'Lid under bush',
+      width: 1600,
+      height: 1200,
+    })
+
+    const archived = applyMutation(recorded, mutation('photo.archive', { photoId: 'p1' }, 900))
+    expect(archived.photos[0].archivedAt).toBe(900)
+  })
 })
 
 // A manual send is recorded against the operator's calendar day. TZ is pinned

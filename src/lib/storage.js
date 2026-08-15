@@ -117,6 +117,67 @@ export function withUniqueIds(customers) {
 // location helpers never pulls the demo seed into a live bundle.
 export { hasLocation }
 
+const MOCK_LID_PHOTO_1 =
+  'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><rect width="800" height="600" fill="%234b5563"/><circle cx="400" cy="300" r="180" fill="%231f2937" stroke="%239ca3af" stroke-width="8"/><circle cx="400" cy="300" r="140" fill="%23374151"/><circle cx="340" cy="300" r="12" fill="%239ca3af"/><circle cx="460" cy="300" r="12" fill="%239ca3af"/><text x="400" y="308" font-family="sans-serif" font-size="20" font-weight="bold" fill="%23e5e7eb" text-anchor="middle">SEPTIC TANK ACCESS</text><text x="400" y="540" font-family="sans-serif" font-size="24" fill="%23f3f4f6" text-anchor="middle">18in depth under rear turf</text></svg>'
+
+const MOCK_LID_PHOTO_2 =
+  'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><rect width="800" height="600" fill="%23365314"/><circle cx="400" cy="320" r="160" fill="%2314532d" stroke="%2386efac" stroke-width="6"/><rect x="300" y="100" width="200" height="40" rx="8" fill="%231e293b"/><text x="400" y="126" font-family="sans-serif" font-size="16" fill="%23f8fafc" text-anchor="middle">HOUSE FOUNDATION (8 FT)</text><text x="400" y="326" font-family="sans-serif" font-size="18" font-weight="bold" fill="%23dcfce7" text-anchor="middle">GREEN RISER LID</text><text x="400" y="550" font-family="sans-serif" font-size="22" fill="%23f0fdf4" text-anchor="middle">Lid flush with grass near AC unit</text></svg>'
+
+export function generateDemoVisits(customers) {
+  const visits = []
+  for (const c of customers) {
+    if (!c.lastPumped) continue
+    visits.push({
+      id: `v_${c.id}_1`,
+      customerId: c.id,
+      visitedOn: c.lastPumped,
+      setsLastPumped: true,
+      gallons: c.tankSizeGal || 1000,
+      priceCents: 45000,
+      tech: 'Hank',
+      notes: 'Routine pump out. Inspected inlet and outlet baffles, tank in good working order.',
+      archivedAt: null,
+      createdAt: 1723507200000,
+    })
+  }
+  return visits
+}
+
+export function generateDemoPhotos(customers) {
+  const photos = []
+  if (customers.length > 0) {
+    photos.push({
+      id: `p_${customers[0].id}_1`,
+      customerId: customers[0].id,
+      visitId: `v_${customers[0].id}_1`,
+      dataUrl: MOCK_LID_PHOTO_1,
+      caption: 'Main concrete access lid excavated (18in depth)',
+      width: 800,
+      height: 600,
+      bytes: 45000,
+      blobState: 'stored',
+      archivedAt: null,
+      createdAt: 1723507200000,
+    })
+  }
+  if (customers.length > 1) {
+    photos.push({
+      id: `p_${customers[1].id}_1`,
+      customerId: customers[1].id,
+      visitId: null,
+      dataUrl: MOCK_LID_PHOTO_2,
+      caption: 'Green riser lid 8ft from AC unit',
+      width: 800,
+      height: 600,
+      bytes: 48000,
+      blobState: 'stored',
+      archivedAt: null,
+      createdAt: 1723507200000,
+    })
+  }
+  return photos
+}
+
 // Shifts dates forward and defensively normalizes the email field so any older
 // stored shape (pre-email) reads as an empty string rather than undefined.
 export function shiftCustomers(customers, days) {
@@ -129,6 +190,13 @@ export function shiftCustomers(customers, days) {
   )
 }
 
+export function shiftVisits(visits, days) {
+  return (visits || []).map((v) => ({
+    ...v,
+    visitedOn: days ? shiftISO(v.visitedOn, days) : v.visitedOn,
+  }))
+}
+
 export function loadState() {
   const today = todayISO()
   let state = null
@@ -136,13 +204,19 @@ export function loadState() {
     const raw = localStorage.getItem(KEY)
     if (raw) {
       const stored = JSON.parse(raw)
+      const days = daysBetween(stored.baseDate || SEED_BASE, today)
+      const customers = withUniqueIds(
+        shiftCustomers(
+          stored.customers || seed.customers,
+          days
+        )
+      )
       state = {
-        customers: withUniqueIds(
-          shiftCustomers(
-            stored.customers || seed.customers,
-            daysBetween(stored.baseDate || SEED_BASE, today)
-          )
-        ),
+        customers,
+        visits: stored.visits && stored.visits.length > 0
+          ? shiftVisits(stored.visits, days)
+          : generateDemoVisits(customers),
+        photos: stored.photos || generateDemoPhotos(customers),
         settings: { ...DEFAULT_SETTINGS, ...stored.settings },
         sentReminders: stored.sentReminders || [],
         sentAt: stored.sentAt || {},
@@ -153,8 +227,11 @@ export function loadState() {
     // corrupted storage — fall back to seed
   }
   if (!state) {
+    const customers = withUniqueIds(shiftCustomers(seed.customers, daysBetween(SEED_BASE, today)))
     state = {
-      customers: withUniqueIds(shiftCustomers(seed.customers, daysBetween(SEED_BASE, today))),
+      customers,
+      visits: generateDemoVisits(customers),
+      photos: generateDemoPhotos(customers),
       settings: { ...DEFAULT_SETTINGS },
       sentReminders: [],
       sentAt: {},

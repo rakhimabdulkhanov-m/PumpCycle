@@ -80,10 +80,17 @@ function PriceSettings({ avgJobPrice, onChange }) {
 
 export default function DueTab({
   customers,
+  visits = [],
+  photos = [],
   settings,
   sentReminders,
   onUpdateCustomer,
   onMarkPumped,
+  onRecordVisit,
+  onUpdateVisit,
+  onArchiveVisit,
+  onRecordPhoto,
+  onArchivePhoto,
   onSetAvgJobPrice,
   onRequestAdd,
   onNavigateCustomer,
@@ -248,9 +255,16 @@ export default function DueTab({
       {selected && (
         <CustomerCard
           customer={selected}
+          visits={visits}
+          photos={photos}
           onClose={() => setSelectedId(null)}
           onUpdate={(patch) => onUpdateCustomer(selected.id, patch)}
           onMarkPumped={() => onMarkPumped(selected.id)}
+          onRecordVisit={onRecordVisit}
+          onUpdateVisit={onUpdateVisit}
+          onArchiveVisit={onArchiveVisit}
+          onRecordPhoto={onRecordPhoto}
+          onArchivePhoto={onArchivePhoto}
           onMapAction={() => {
             onViewChange({ ...viewRef.current, scrollTop: scrollTopRef.current })
             onNavigateCustomer(hasLocation(selected) ? 'show' : 'place', selected.id)

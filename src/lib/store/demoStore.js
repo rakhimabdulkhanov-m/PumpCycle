@@ -78,6 +78,10 @@ export function createDemoStore(options = {}) {
     setPin: (customerId, point) => mutate(envelope('pin.set', { customerId, ...point })),
     restorePin: (customerId, pin) => mutate(envelope('pin.restore', { customerId, ...pin })),
     recordVisit: (visit) => mutate(envelope('visit.record', visit)),
+    updateVisit: (visitId, changes) => mutate(envelope('visit.update', { visitId, changes })),
+    archiveVisit: (visitId) => mutate(envelope('visit.archive', { visitId })),
+    recordPhoto: (photo) => mutate(envelope('photo.record', photo)),
+    archivePhoto: (photoId) => mutate(envelope('photo.archive', { photoId })),
     correctLastPumped: (customerId, lastPumped, id = mutationIdFactory()) =>
       mutate(envelope('last_pumped.correct', { id, customerId, lastPumped })),
     setAvgJobPrice: (avgJobPrice) => mutate(envelope('setting.set_avg_job_price', {

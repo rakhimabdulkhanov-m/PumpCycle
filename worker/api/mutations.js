@@ -14,7 +14,11 @@ const TYPES = new Set([
   'pin.set',
   'pin.restore',
   'visit.record',
+  'visit.update',
+  'visit.archive',
   'last_pumped.correct',
+  'photo.record',
+  'photo.archive',
   'setting.set_avg_job_price',
   'reminder.mark_manual_sent',
 ])
@@ -639,13 +643,169 @@ async function markManualSent(db, envelope, now, actorUserId) {
   return result
 }
 
+async function updateVisit(db, envelope, now, actorUserId) {
+  const p = envelope.payload
+  exactKeys(p, ['visitId', 'changes'], 'payload', ['visitId', 'changes'])
+  const visitId = id(p.visitId, 'payload.visitId')
+  const v = await db.prepare('SELECT * FROM visits WHERE id = ?').bind(visitId).first()
+  if (!v) throw new MutationError('visit not found', 404)
+  const allowed = ['visitedOn', 'setsLastPumped', 'gallons', 'priceCents', 'tech', 'notes', 'archivedAt']
+  exactKeys(p.changes, allowed, 'payload.changes')
+  if (Object.keys(p.changes).length === 0) throw new MutationError('payload.changes must not be empty')
+
+  const columns = {
+    visitedOn: ['visited_on', (val) => date(val, 'payload.changes.visitedOn')],
+    setsLastPumped: ['sets_last_pumped', (val) => (val ? 1 : 0)],
+    gallons: ['gallons', (val) => integer(val, 'payload.changes.gallons', { min: 0 })],
+    priceCents: ['price_cents', (val) => integer(val, 'payload.changes.priceCents', { min: 0 })],
+    tech: ['tech', (val) => string(val, 'payload.changes.tech', { max: 300 })],
+    notes: ['notes', (val) => string(val, 'payload.changes.notes')],
+    archivedAt: ['archived_at', (val) => moment(val, 'payload.changes.archivedAt', true)],
+  }
+
+  const assignments = []
+  const bindings = []
+  for (const [key, val] of Object.entries(p.changes)) {
+    const [col, sanitize] = columns[key]
+    assignments.push(`${col} = ?`)
+    bindings.push(sanitize(val))
+  }
+  bindings.push(visitId)
+
+  // Recompute customer last_pumped if visitedOn, setsLastPumped, or archivedAt changed
+  const customerId = v.customer_id
+  const previousCust = await customer(db, customerId)
+
+  const targetVisitedOn = Object.hasOwn(p.changes, 'visitedOn') ? p.changes.visitedOn : v.visited_on
+  const targetSets = Object.hasOwn(p.changes, 'setsLastPumped') ? (p.changes.setsLastPumped ? 1 : 0) : v.sets_last_pumped
+  const targetArchived = Object.hasOwn(p.changes, 'archivedAt') ? p.changes.archivedAt : v.archived_at
+
+  const otherVisits = (
+    await db
+      .prepare(
+        `SELECT visited_on FROM visits
+         WHERE customer_id = ? AND id != ? AND sets_last_pumped = 1 AND archived_at IS NULL`
+      )
+      .bind(customerId, visitId)
+      .all()
+  ).results
+
+  const candidates = otherVisits.map((r) => r.visited_on)
+  if (targetSets === 1 && targetArchived == null && targetVisitedOn) {
+    candidates.push(targetVisitedOn)
+  }
+  candidates.sort()
+  const newLastPumped = candidates.length > 0 ? candidates[candidates.length - 1] : null
+  const custChanged = newLastPumped !== previousCust.last_pumped
+
+  const seqCount = custChanged ? 2 : 1
+  const statements = [
+    reserveSeqs(db, seqCount),
+    db
+      .prepare(`UPDATE visits SET ${assignments.join(', ')}, seq = ${seqValue(seqCount, 0)} WHERE id = ?`)
+      .bind(...bindings),
+  ]
+  if (custChanged) {
+    statements.push(
+      db
+        .prepare(
+          `UPDATE customers SET last_pumped = ?, cycle_seq = cycle_seq + 1,
+           edited_in_app = 1, updated_at = ?, seq = ${seqValue(seqCount, 1)} WHERE id = ?`
+        )
+        .bind(newLastPumped, now, customerId)
+    )
+  }
+  const result = ack(envelope)
+  statements.push(audit(db, now, actorUserId, 'visit', visitId, envelope.type, v, { ...v, ...p.changes }))
+  statements.push(applied(db, envelope, now, actorUserId, result))
+  await db.batch(statements)
+  return result
+}
+
+async function archiveVisit(db, envelope, now, actorUserId) {
+  const p = envelope.payload
+  exactKeys(p, ['visitId'], 'payload', ['visitId'])
+  const visitId = id(p.visitId, 'payload.visitId')
+  return updateVisit(
+    db,
+    { ...envelope, type: 'visit.update', payload: { visitId, changes: { archivedAt: now } } },
+    now,
+    actorUserId
+  )
+}
+
+async function recordPhoto(db, envelope, now, actorUserId) {
+  const p = envelope.payload
+  const keys = ['id', 'customerId', 'visitId', 'r2Key', 'contentType', 'bytes', 'width', 'height', 'caption', 'blobState']
+  exactKeys(p, keys, 'payload', ['id', 'customerId'])
+  const photoId = id(p.id, 'payload.id')
+  const customerId = id(p.customerId, 'payload.customerId')
+  await customer(db, customerId)
+  const visitId = p.visitId ? id(p.visitId, 'payload.visitId') : null
+  if (visitId) {
+    const v = await db.prepare('SELECT id FROM visits WHERE id = ? AND customer_id = ?').bind(visitId, customerId).first()
+    if (!v) throw new MutationError('visit not found for this customer', 404)
+  }
+  const r2Key = string(p.r2Key, 'payload.r2Key', { max: 500 })
+  const contentType = string(p.contentType, 'payload.contentType', { max: 100 })
+  const bytes = integer(p.bytes, 'payload.bytes', { optional: true })
+  const width = integer(p.width, 'payload.width', { optional: true })
+  const height = integer(p.height, 'payload.height', { optional: true })
+  const caption = string(p.caption, 'payload.caption')
+  const blobState = ['pending', 'stored'].includes(p.blobState) ? p.blobState : 'pending'
+
+  const photo = { id: photoId, customerId, visitId, r2Key, contentType, bytes, width, height, caption, blobState }
+  const result = ack(envelope)
+  await db.batch([
+    reserveSeqs(db, 1),
+    db.prepare(
+      `INSERT INTO photos
+       (id, customer_id, visit_id, r2_key, content_type, bytes, width, height, caption, blob_state, created_at, seq)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${seqValue(1, 0)})
+       ON CONFLICT(id) DO UPDATE SET
+         visit_id = excluded.visit_id,
+         r2_key = excluded.r2_key,
+         content_type = excluded.content_type,
+         bytes = excluded.bytes,
+         width = excluded.width,
+         height = excluded.height,
+         caption = excluded.caption,
+         blob_state = excluded.blob_state,
+         seq = excluded.seq`
+    ).bind(photoId, customerId, visitId, r2Key, contentType, bytes, width, height, caption, blobState, now),
+    audit(db, now, actorUserId, 'photo', photoId, envelope.type, null, photo),
+    applied(db, envelope, now, actorUserId, result),
+  ])
+  return result
+}
+
+async function archivePhoto(db, envelope, now, actorUserId) {
+  const p = envelope.payload
+  exactKeys(p, ['photoId'], 'payload', ['photoId'])
+  const photoId = id(p.photoId, 'payload.photoId')
+  const previous = await db.prepare('SELECT * FROM photos WHERE id = ?').bind(photoId).first()
+  if (!previous) throw new MutationError('photo not found', 404)
+  const result = ack(envelope)
+  await db.batch([
+    reserveSeqs(db, 1),
+    db.prepare(`UPDATE photos SET archived_at = ?, seq = ${seqValue(1, 0)} WHERE id = ?`).bind(now, photoId),
+    audit(db, now, actorUserId, 'photo', photoId, envelope.type, previous, { ...previous, archived_at: now }),
+    applied(db, envelope, now, actorUserId, result),
+  ])
+  return result
+}
+
 const APPLY = {
   'customer.add': addCustomer,
   'customer.update': updateCustomer,
   'pin.set': (db, envelope, now, actorUserId) => changePin(db, envelope, now, false, actorUserId),
   'pin.restore': (db, envelope, now, actorUserId) => changePin(db, envelope, now, true, actorUserId),
   'visit.record': recordVisit,
+  'visit.update': updateVisit,
+  'visit.archive': archiveVisit,
   'last_pumped.correct': correctLastPumped,
+  'photo.record': recordPhoto,
+  'photo.archive': archivePhoto,
   'setting.set_avg_job_price': setAvgJobPrice,
   'reminder.mark_manual_sent': markManualSent,
 }
@@ -667,10 +827,11 @@ export async function applyMutation(db, input, now = Date.now(), actorUserId = '
     const entityId = envelope.payload?.id
     const table = envelope.type === 'customer.add' ? 'customers'
       : ['visit.record', 'last_pumped.correct'].includes(envelope.type) ? 'visits'
-        : null
+        : envelope.type === 'photo.record' ? 'photos'
+          : null
     if (table && entityId) {
       const existing = await db.prepare(`SELECT id FROM ${table} WHERE id = ?`).bind(entityId).first()
-      if (existing) throw new MutationError(`${table === 'customers' ? 'customer' : 'visit'} id already exists`, 409)
+      if (existing) throw new MutationError(`${table === 'customers' ? 'customer' : table === 'visits' ? 'visit' : 'photo'} id already exists`, 409)
     }
     throw error
   }

@@ -518,8 +518,15 @@ function NeedsPinList({ customers, onPick, onClose, hiddenOnMobile }) {
 
 export default function MapTab({
   customers,
+  visits = [],
+  photos = [],
   onUpdateCustomer,
   onMarkPumped,
+  onRecordVisit,
+  onUpdateVisit,
+  onArchiveVisit,
+  onRecordPhoto,
+  onArchivePhoto,
   onSetPin,
   onRestorePin,
   onAddCustomer,
@@ -887,9 +894,16 @@ export default function MapTab({
       {selected && !placing && (
         <CustomerCard
           customer={selected}
+          visits={visits}
+          photos={photos}
           onClose={() => setSelectedId(null)}
           onUpdate={(patch) => onUpdateCustomer(selected.id, patch)}
           onMarkPumped={() => onMarkPumped(selected.id)}
+          onRecordVisit={onRecordVisit}
+          onUpdateVisit={onUpdateVisit}
+          onArchiveVisit={onArchiveVisit}
+          onRecordPhoto={onRecordPhoto}
+          onArchivePhoto={onArchivePhoto}
           onMovePin={() => beginPlacing({ mode: 'existing', customerId: selected.id })}
         />
       )}

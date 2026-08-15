@@ -208,6 +208,8 @@ function DayBlock({ day, onOpenText }) {
 
 export default function RemindersTab({
   customers,
+  visits = [],
+  photos = [],
   sentReminders,
   sentAt,
   reminderLog,
@@ -215,6 +217,11 @@ export default function RemindersTab({
   onMarkSent,
   onUpdateCustomer,
   onMarkPumped,
+  onRecordVisit,
+  onUpdateVisit,
+  onArchiveVisit,
+  onRecordPhoto,
+  onArchivePhoto,
   onNavigateCustomer,
 }) {
   const [view, setView] = useState('today')
@@ -474,9 +481,16 @@ export default function RemindersTab({
       {cardCustomer && (
         <CustomerCard
           customer={cardCustomer}
+          visits={visits}
+          photos={photos}
           onClose={() => setCardId(null)}
           onUpdate={(patch) => onUpdateCustomer(cardCustomer.id, patch)}
           onMarkPumped={() => onMarkPumped(cardCustomer.id)}
+          onRecordVisit={onRecordVisit}
+          onUpdateVisit={onUpdateVisit}
+          onArchiveVisit={onArchiveVisit}
+          onRecordPhoto={onRecordPhoto}
+          onArchivePhoto={onArchivePhoto}
           onMapAction={() =>
             onNavigateCustomer(hasLocation(cardCustomer) ? 'show' : 'place', cardCustomer.id)
           }

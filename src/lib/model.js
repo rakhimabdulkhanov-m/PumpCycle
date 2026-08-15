@@ -8,7 +8,11 @@ export const MUTATION_TYPES = Object.freeze([
   'pin.set',
   'pin.restore',
   'visit.record',
+  'visit.update',
+  'visit.archive',
   'last_pumped.correct',
+  'photo.record',
+  'photo.archive',
   'setting.set_avg_job_price',
   'reminder.mark_manual_sent',
 ])
@@ -238,13 +242,95 @@ function markReminderSent(snapshot, mutation) {
   }
 }
 
+function updateVisit(snapshot, mutation) {
+  const { visitId, changes } = mutation.payload
+  if (!Array.isArray(snapshot.visits)) return snapshot
+  const target = snapshot.visits.find((v) => v.id === visitId)
+  if (!target) return snapshot
+
+  const updatedVisit = { ...target, ...changes }
+  const visits = snapshot.visits.map((v) => (v.id === visitId ? updatedVisit : v))
+
+  // Recompute customer lastPumped if setsLastPumped, visitedOn, or archivedAt changed
+  const customerId = target.customerId
+  const customer = array(snapshot.customers).find((c) => c.id === customerId)
+  if (!customer) return { ...snapshot, visits }
+
+  const activeDates = visits
+    .filter(
+      (v) =>
+        v.customerId === customerId &&
+        v.setsLastPumped &&
+        v.archivedAt == null &&
+        v.visitedOn
+    )
+    .map((v) => v.visitedOn)
+    .sort()
+
+  const newLastPumped = activeDates.length > 0 ? activeDates[activeDates.length - 1] : null
+  if (newLastPumped === customer.lastPumped) {
+    return { ...snapshot, visits }
+  }
+
+  let next = replaceCustomer({ ...snapshot, visits }, customerId, (c) => ({
+    ...c,
+    lastPumped: newLastPumped,
+    ...(own(c, 'cycleSeq') ? { cycleSeq: (c.cycleSeq || 0) + 1 } : {}),
+  }))
+  next = withoutCustomerReminders(next, customerId)
+  return next
+}
+
+function archiveVisit(snapshot, mutation) {
+  const { visitId } = mutation.payload
+  return updateVisit(snapshot, {
+    ...mutation,
+    type: 'visit.update',
+    payload: { visitId, changes: { archivedAt: mutation.createdAt } },
+  })
+}
+
+function recordPhoto(snapshot, mutation) {
+  const photo = {
+    visitId: null,
+    r2Key: '',
+    contentType: 'image/jpeg',
+    bytes: 0,
+    width: 0,
+    height: 0,
+    caption: '',
+    blobState: 'stored',
+    archivedAt: null,
+    createdAt: mutation.createdAt,
+    ...mutation.payload,
+  }
+  const existing = array(snapshot.photos).find((p) => p.id === photo.id)
+  const photos = existing
+    ? snapshot.photos.map((p) => (p.id === photo.id ? { ...p, ...photo } : p))
+    : [...array(snapshot.photos), photo]
+  return { ...snapshot, photos }
+}
+
+function archivePhoto(snapshot, mutation) {
+  const { photoId } = mutation.payload
+  if (!Array.isArray(snapshot.photos)) return snapshot
+  const photos = snapshot.photos.map((p) =>
+    p.id === photoId ? { ...p, archivedAt: mutation.createdAt } : p
+  )
+  return { ...snapshot, photos }
+}
+
 const APPLY = {
   'customer.add': addCustomer,
   'customer.update': updateCustomer,
   'pin.set': (snapshot, mutation) => changePin(snapshot, mutation, false),
   'pin.restore': (snapshot, mutation) => changePin(snapshot, mutation, true),
   'visit.record': recordVisit,
+  'visit.update': updateVisit,
+  'visit.archive': archiveVisit,
   'last_pumped.correct': correctLastPumped,
+  'photo.record': recordPhoto,
+  'photo.archive': archivePhoto,
   'setting.set_avg_job_price': setAvgJobPrice,
   'reminder.mark_manual_sent': markReminderSent,
 }

@@ -458,6 +458,79 @@ describe('mutation happy paths and semantics', () => {
       provider: 'manual', status: 'sent', sent_at: 11000,
     })
   })
+
+  it('visit.update updates visit notes, tech, gallons, price and recomputes last_pumped if date changes', async () => {
+    const { id } = await add({ lastPumped: '2026-01-01' })
+    const visitId = uid('visit-up')
+    await applyMutation(db(), envelope('visit.record', {
+      id: visitId, customerId: id, visitedOn: '2026-03-01', gallons: 1000,
+      priceCents: 40000, tech: 'Hank', notes: 'all good',
+    }), 12000)
+    expect(await row('SELECT last_pumped FROM customers WHERE id = ?', id)).toEqual({ last_pumped: '2026-03-01' })
+
+    await applyMutation(db(), envelope('visit.update', {
+      visitId,
+      changes: {
+        visitedOn: '2026-04-01',
+        tech: 'Billy',
+        notes: 'lid was deep, added 6in riser',
+      },
+    }), 13000)
+
+    const updated = await row('SELECT visited_on, tech, notes FROM visits WHERE id = ?', visitId)
+    expect(updated).toEqual({
+      visited_on: '2026-04-01',
+      tech: 'Billy',
+      notes: 'lid was deep, added 6in riser',
+    })
+    expect(await row('SELECT last_pumped FROM customers WHERE id = ?', id)).toEqual({ last_pumped: '2026-04-01' })
+  })
+
+  it('visit.archive archives a visit and falls back to previous driving visit date', async () => {
+    const { id } = await add({ lastPumped: '2026-01-01' })
+    const v1 = uid('visit-v1')
+    const v2 = uid('visit-v2')
+    await applyMutation(db(), envelope('visit.record', {
+      id: v1, customerId: id, visitedOn: '2026-02-01',
+    }), 14000)
+    await applyMutation(db(), envelope('visit.record', {
+      id: v2, customerId: id, visitedOn: '2026-05-01',
+    }), 15000)
+    expect(await row('SELECT last_pumped FROM customers WHERE id = ?', id)).toEqual({ last_pumped: '2026-05-01' })
+
+    await applyMutation(db(), envelope('visit.archive', { visitId: v2 }), 16000)
+    expect((await row('SELECT archived_at FROM visits WHERE id = ?', v2)).archived_at).toBe(16000)
+    expect(await row('SELECT last_pumped FROM customers WHERE id = ?', id)).toEqual({ last_pumped: '2026-02-01' })
+  })
+
+  it('photo.record inserts and updates photo metadata, and photo.archive sets archived_at', async () => {
+    const { id } = await add()
+    const photoId = uid('photo-rec')
+    await applyMutation(db(), envelope('photo.record', {
+      id: photoId,
+      customerId: id,
+      r2Key: `photos/${id}/${photoId}.jpg`,
+      contentType: 'image/jpeg',
+      bytes: 12345,
+      width: 1600,
+      height: 1200,
+      caption: 'Lid under azalea',
+      blobState: 'stored',
+    }), 17000)
+
+    const stored = await row('SELECT id, customer_id, caption, width, height, blob_state FROM photos WHERE id = ?', photoId)
+    expect(stored).toEqual({
+      id: photoId,
+      customer_id: id,
+      caption: 'Lid under azalea',
+      width: 1600,
+      height: 1200,
+      blob_state: 'stored',
+    })
+
+    await applyMutation(db(), envelope('photo.archive', { photoId }), 18000)
+    expect((await row('SELECT archived_at FROM photos WHERE id = ?', photoId)).archived_at).toBe(18000)
+  })
 })
 
 describe('validation and semantic errors', () => {
