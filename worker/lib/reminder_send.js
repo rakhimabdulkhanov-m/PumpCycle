@@ -396,11 +396,12 @@ export async function claimReminder(db, item, now, seq) {
   return inserted ? inserted.id : null
 }
 
-function renderMessage(item, companyName) {
+function renderMessage(item, companyName, companyPhone) {
   const input = {
     customerName: item.customer.name,
     address: item.customer.address,
     companyName,
+    companyPhone,
     dueDate: item.dueDate,
   }
   if (item.kind === 'pre') return preDueEmail(input)
@@ -475,6 +476,7 @@ export async function runTenantReminders(tenant, env, { now = Date.now(), force 
 
   const today = todayISOInZone(timezone, now)
   const companyName = settings.companyName || tenant.config?.company || ''
+  const companyPhone = settings.companyPhone || tenant.config?.phone || ''
   const fromName = settings.fromName || companyName
   const from = fromName ? `${fromName} <${fromEmail}>` : fromEmail
   const replyTo = settings.replyTo || tenant.config?.replyTo || ''
@@ -625,7 +627,7 @@ export async function runTenantReminders(tenant, env, { now = Date.now(), force 
       return { ok: true, skipped: true }
     }
 
-    const message = renderMessage(item, companyName)
+    const message = renderMessage(item, companyName, companyPhone)
     const result = await sendEmail(env.RESEND_API_KEY, {
       from,
       to: item.customer.email,
