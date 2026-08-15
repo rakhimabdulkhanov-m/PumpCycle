@@ -234,7 +234,7 @@ async function updateCustomer(db, envelope, now, actorUserId) {
   exactKeys(p, ['customerId', 'changes'], 'payload', ['customerId', 'changes'])
   const customerId = id(p.customerId, 'payload.customerId')
   const previous = await customer(db, customerId)
-  const allowed = ['name', 'address', 'phone', 'email', 'tankSizeGal', 'cycleMonths', 'notes']
+  const allowed = ['name', 'address', 'phone', 'email', 'tankSizeGal', 'cycleMonths', 'notes', 'archivedAt']
   exactKeys(p.changes, allowed, 'payload.changes')
   if (Object.keys(p.changes).length === 0) throw new MutationError('payload.changes must not be empty')
 
@@ -246,6 +246,7 @@ async function updateCustomer(db, envelope, now, actorUserId) {
     tankSizeGal: ['tank_size_gal', (v) => integer(v, 'payload.changes.tankSizeGal')],
     cycleMonths: ['cycle_months', (v) => integer(v, 'payload.changes.cycleMonths', { min: 1 })],
     notes: ['notes', (v) => string(v, 'payload.changes.notes')],
+    archivedAt: ['archived_at', (v) => (v === null ? null : integer(v, 'payload.changes.archivedAt', { min: 0 }))],
   }
   const assignments = []
   const bindings = []

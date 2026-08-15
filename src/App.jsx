@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import Topbar from './components/Topbar.jsx'
 import TabNav from './components/TabNav.jsx'
 import LeadModal from './components/LeadModal.jsx'
@@ -240,6 +240,11 @@ function App() {
   const setAvgJobPrice = useCallback((price) => store.setAvgJobPrice(price), [])
   const markReminderSent = useCallback((reminderId) => store.markReminderSent(reminderId), [])
 
+  const activeCustomers = useMemo(
+    () => (data.customers || []).filter((c) => !c.archivedAt),
+    [data.customers]
+  )
+
   if (mode === 'live' && ['auth-required', 'setup-required'].includes(data.storeStatus)) {
     return <AuthGate snapshot={data} />
   }
@@ -260,7 +265,7 @@ function App() {
       <main className="min-h-0 flex-1 overflow-auto">
         {tab === 'map' && (
           <MapTab
-            customers={data.customers}
+            customers={activeCustomers}
             onUpdateCustomer={updateCustomer}
             onMarkPumped={markPumped}
             onSetPin={setPin}
@@ -276,7 +281,7 @@ function App() {
         )}
         {tab === 'due' && (
           <DueTab
-            customers={data.customers}
+            customers={activeCustomers}
             settings={data.settings}
             sentReminders={data.sentReminders}
             onUpdateCustomer={updateCustomer}
@@ -290,7 +295,7 @@ function App() {
         )}
         {tab === 'reminders' && (
           <RemindersTab
-            customers={data.customers}
+            customers={activeCustomers}
             sentReminders={data.sentReminders}
             sentAt={data.sentAt}
             reminderLog={data.reminderLog}

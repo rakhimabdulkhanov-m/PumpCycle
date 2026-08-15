@@ -89,15 +89,15 @@ describe('mutation happy paths and semantics', () => {
     expect(await count('applied_mutations', 'mutation_id = ?', mutationId)).toBe(1)
   })
 
-  it('customer.update accepts only identity/contact/cycle/notes and increments cycle_seq on cycle change', async () => {
+  it('customer.update accepts identity/contact/cycle/notes/archivedAt and increments cycle_seq on cycle change', async () => {
     const { id } = await add()
     const result = await applyMutation(db(), envelope('customer.update', {
       customerId: id,
-      changes: { name: 'Pat Updated', cycleMonths: 24, notes: 'Gate on left' },
+      changes: { name: 'Pat Updated', cycleMonths: 24, notes: 'Gate on left', archivedAt: 3000 },
     }), 3000)
     expect(result.status).toBe('applied')
-    expect(await row('SELECT name, cycle_months, cycle_seq, notes FROM customers WHERE id = ?', id))
-      .toEqual({ name: 'Pat Updated', cycle_months: 24, cycle_seq: 1, notes: 'Gate on left' })
+    expect(await row('SELECT name, cycle_months, cycle_seq, notes, archived_at FROM customers WHERE id = ?', id))
+      .toEqual({ name: 'Pat Updated', cycle_months: 24, cycle_seq: 1, notes: 'Gate on left', archived_at: 3000 })
   })
 
   it('does not stamp a cosmetic-only address edit as an address change', async () => {

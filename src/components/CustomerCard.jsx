@@ -120,6 +120,26 @@ export default function CustomerCard({
     }
   }
 
+  async function archiveCustomer() {
+    if (savingAction) return
+    if (
+      !window.confirm(
+        'Archive this customer? They will be hidden from your map and reminder schedule.'
+      )
+    ) {
+      return
+    }
+    setSavingAction('archive')
+    setWriteError('')
+    try {
+      await onUpdate({ archivedAt: Date.now() })
+      onClose()
+    } catch {
+      setWriteError('Could not archive this customer. Try again.')
+      setSavingAction(null)
+    }
+  }
+
   async function markPumped() {
     if (savingAction) return
     setSavingAction('pumped')
@@ -286,6 +306,16 @@ export default function CustomerCard({
             />
           </Field>
 
+          <div className="mt-6 border-t border-gray-200 pt-4 pb-2 text-center">
+            <button
+              type="button"
+              onClick={archiveCustomer}
+              disabled={!!savingAction}
+              className="text-sm font-medium text-red-600 hover:text-red-800 hover:underline disabled:opacity-60"
+            >
+              {savingAction === 'archive' ? 'Archiving...' : 'Archive this customer'}
+            </button>
+          </div>
         </>
       )}
       </div>

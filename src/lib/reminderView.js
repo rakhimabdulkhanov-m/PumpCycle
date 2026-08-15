@@ -69,19 +69,16 @@ export function whoSends(channel) {
 export const ADDRESS_PROBLEMS = Object.freeze({
   bounced: 'The email came back undeliverable',
   complained: 'Marked your email as spam - call this one instead',
-  missing: 'No email address on file',
   unreachable: 'Emails to this address are not getting through',
 })
 
 /**
  * Why the automatic sender will never reach this customer, or null.
  *
- * Both halves matter, and they are different failures. A bounced or complained
- * address is a customer who WAS being mailed and silently stopped being mailed
- * (reminder_send.js skips `emailStatus !== 'ok'`). A customer with no address
- * at all keeps the schema default 'ok' and is skipped without a trace. Neither
- * appears anywhere else in the app, which makes a silently-dead customer the
- * product's worst failure mode - it looks exactly like a working one.
+ * A bounced or complained address is a customer who WAS being mailed and
+ * silently stopped being mailed (reminder_send.js skips `emailStatus !== 'ok'`).
+ * Surfaced at the top of the Reminders tab so the operator can fix typos or call.
+ * Phone-only customers (with empty email) are NOT errors and return null.
  *
  * A missing emailStatus reads as 'ok': the demo seed has no such field, and the
  * server projection defaults it to 'ok' as well.
@@ -92,7 +89,6 @@ export function addressProblem(customer) {
   if (status === 'bounced') return 'bounced'
   if (status === 'complained') return 'complained'
   if (status !== 'ok') return 'unreachable'
-  if (String(customer.email || '').trim() === '') return 'missing'
   return null
 }
 

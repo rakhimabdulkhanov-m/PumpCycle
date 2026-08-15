@@ -79,11 +79,12 @@ describe('who sends this', () => {
 // ---------------------------------------------------------------------------
 
 describe('customersNeedingEmail', () => {
-  it('finds both silently-dead shapes: a failed address and no address', () => {
+  it('finds send failures (bounced, complained, unreachable) and ignores phone-only customers', () => {
     expect(addressProblem(cust({ emailStatus: 'bounced' }))).toBe('bounced')
     expect(addressProblem(cust({ emailStatus: 'complained' }))).toBe('complained')
-    expect(addressProblem(cust({ email: '   ' }))).toBe('missing')
-    expect(addressProblem(cust({ email: '' }))).toBe('missing')
+    expect(addressProblem(cust({ emailStatus: 'unreachable' }))).toBe('unreachable')
+    expect(addressProblem(cust({ email: '   ' }))).toBe(null)
+    expect(addressProblem(cust({ email: '' }))).toBe(null)
   })
 
   it('reads a missing emailStatus as ok (demo seed and legacy rows)', () => {
@@ -92,23 +93,19 @@ describe('customersNeedingEmail', () => {
   })
 
   it('ignores archived customers', () => {
-    expect(addressProblem(cust({ email: '', archivedAt: 1723600000000 }))).toBe(null)
+    expect(addressProblem(cust({ emailStatus: 'bounced', archivedAt: 1723600000000 }))).toBe(null)
   })
 
-  it('lists failed addresses before never-filled ones, with plain wording', () => {
+  it('lists failed addresses with plain wording and excludes empty emails', () => {
     const rows = customersNeedingEmail([
       cust({ id: 'a', name: 'Zeb Ford', email: '' }),
       cust({ id: 'b', name: 'Doris McGinnis', emailStatus: 'bounced' }),
       cust({ id: 'c', name: 'Randy Huffstetler', emailStatus: 'complained' }),
       cust({ id: 'd', name: 'Fine Customer' }),
     ])
-    expect(rows.map((r) => r.customer.id)).toEqual(['b', 'c', 'a'])
+    expect(rows.map((r) => r.customer.id)).toEqual(['b', 'c'])
     expect(rows[0].message).toBe('The email came back undeliverable')
-    // A complaint is permanent by policy: no edit the operator can make in the
-    // app lifts it, so this line has to name the action that does work. Without
-    // it this customer sits in the list forever and he taps Fix every morning.
     expect(rows[1].message).toBe('Marked your email as spam - call this one instead')
-    expect(rows[2].message).toBe('No email address on file')
   })
 
   it('is empty for an empty book', () => {
