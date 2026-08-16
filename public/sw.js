@@ -42,6 +42,8 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return
 
   const url = new URL(request.url)
+  // Only handle HTTP/HTTPS schemes (ignore chrome-extension, blob, data, etc.)
+  if (!url.protocol.startsWith('http')) return
 
   // API endpoints strategy
   if (url.pathname.startsWith('/api/')) {
@@ -89,6 +91,11 @@ self.addEventListener('fetch', (event) => {
           })
         })
     )
+    return
+  }
+
+  // Only cache same-origin static assets in SW cache
+  if (url.origin !== self.location.origin) {
     return
   }
 

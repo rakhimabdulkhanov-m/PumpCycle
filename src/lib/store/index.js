@@ -18,22 +18,27 @@ const neutral = (extra = {}) => emptySnapshot({
 
 const LAST_BOOTSTRAP_KEY = 'pumpcycle-last-bootstrap'
 
+function getCachedBootstrap() {
+  if (typeof localStorage === 'undefined') return null
+  try {
+    const cached = JSON.parse(localStorage.getItem(LAST_BOOTSTRAP_KEY) || 'null')
+    if (cached && ['demo', 'live'].includes(cached.mode)) {
+      return { ...cached, offline: true }
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return null
+}
+
 async function readBootstrap(fetchImpl) {
   let response
   try {
     response = await fetchImpl('/api/bootstrap')
   } catch {
     // Network is offline. Check if we have a cached bootstrap in localStorage
-    if (typeof localStorage !== 'undefined') {
-      try {
-        const cached = JSON.parse(localStorage.getItem(LAST_BOOTSTRAP_KEY) || 'null')
-        if (cached && ['demo', 'live'].includes(cached.mode)) {
-          return { ...cached, offline: true }
-        }
-      } catch {
-        // Ignore parse errors
-      }
-    }
+    const cached = getCachedBootstrap()
+    if (cached) return cached
     throw new StoreUnavailableError('Network is offline and no cached session was found', 'offline')
   }
 
@@ -44,6 +49,10 @@ async function readBootstrap(fetchImpl) {
     body = null
   }
   if (!response.ok || body?.ok !== true || !['demo', 'live'].includes(body.mode)) {
+    // Server or proxy returned 5xx/4xx error while offline. Fall back to cached session if available.
+    const cached = getCachedBootstrap()
+    if (cached) return cached
+
     throw new StoreUnavailableError(
       body?.error || `Bootstrap failed (${response.status || 'invalid response'})`,
       'bootstrap-failed'

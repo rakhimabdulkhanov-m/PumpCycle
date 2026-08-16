@@ -98,6 +98,10 @@ export default function CustomerCard({
     }
   }, [])
 
+  useEffect(() => {
+    stopNavigation()
+  }, [customer?.id])
+
   function startNavigation() {
     setNavigating(true)
     setNavError('')
