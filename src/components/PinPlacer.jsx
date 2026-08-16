@@ -4,7 +4,7 @@
 // reaches by zooming out for context and not coming back in, so it says come
 // back in, rather than telling him he is wrong.
 const BLOCKED_LABEL = {
-  zoom: 'Zoom in until you can see the lid',
+  zoom: 'Zoom in to see lid',
   move: 'Move the map onto the lid',
   no_session: 'Move the map onto the lid',
 }
@@ -55,17 +55,17 @@ export default function PinPlacer({
         </svg>
       </div>
 
-      <div className="absolute top-3 left-1/2 z-[1100] max-w-[calc(100vw-1.5rem)] -translate-x-1/2 rounded-2xl bg-gray-900 px-4 py-2 text-center text-white shadow-lg">
-        <div className="text-base font-bold" data-testid="placing-name">
+      <div className="absolute top-3 left-1/2 z-[1100] max-w-[calc(100vw-6rem)] -translate-x-1/2 rounded-2xl bg-gray-900 px-4 py-2 text-center text-white shadow-lg">
+        <div className="text-sm font-bold" data-testid="placing-name">
           {title}
         </div>
-        {address && <div className="text-sm text-gray-300">{address}</div>}
-        <div className="text-sm">Move the map so the cross sits on his tank lid.</div>
+        {address && <div className="text-xs text-gray-300">{address}</div>}
+        <div className="text-xs font-semibold">Move the map so the cross sits on his tank lid.</div>
       </div>
 
       {/* Thumb-sized, at the bottom edge, where a hand holding a phone already
           is. Save is the ONLY path to a recorded coordinate. */}
-      <div className="absolute inset-x-0 bottom-0 z-[1200] flex gap-3 bg-white/95 p-3 shadow-[0_-2px_10px_rgba(0,0,0,0.25)]">
+      <div className="absolute inset-x-0 bottom-0 z-[1200] flex gap-3 bg-white/95 p-3 pb-[calc(env(safe-area-inset-bottom,0px)+0.75rem)] shadow-[0_-2px_10px_rgba(0,0,0,0.25)]">
         <button
           type="button"
           onClick={onCancel}

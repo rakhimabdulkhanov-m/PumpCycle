@@ -26,7 +26,7 @@ export default function NewLidPanel({
         <button
           onClick={onCancel}
           aria-label="Close"
-          className="text-3xl leading-none text-gray-400 hover:text-gray-600"
+          className="flex min-h-11 min-w-11 -mr-2 -mt-2 items-center justify-center rounded-lg text-3xl leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-600"
         >
           &times;
         </button>
@@ -71,7 +71,7 @@ export default function NewLidPanel({
         />
       </div>
 
-      <div className="border-t border-gray-200 p-5">
+      <div className="border-t border-gray-200 p-5 pb-[calc(env(safe-area-inset-bottom,0px)+1.25rem)]">
         <button
           type="button"
           onClick={onBack}

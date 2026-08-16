@@ -46,7 +46,7 @@ export default function LeadModal({ open, onClose }) {
           <button
             onClick={onClose}
             aria-label="Close"
-            className="text-3xl leading-none text-gray-400 hover:text-gray-600"
+            className="flex min-h-11 min-w-11 -mr-2 -mt-2 items-center justify-center rounded-lg text-3xl leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-600"
           >
             &times;
           </button>

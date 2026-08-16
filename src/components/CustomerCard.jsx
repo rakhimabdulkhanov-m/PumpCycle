@@ -820,7 +820,7 @@ export default function CustomerCard({
       </div>
 
       {/* Fixed bottom actions */}
-      <div className="border-t border-gray-200 p-4 pt-3">
+      <div className="border-t border-gray-200 p-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
         {writeError && (
           <p role="alert" className="mb-2 text-base font-semibold text-red-700">
             {writeError}
@@ -841,7 +841,7 @@ export default function CustomerCard({
                   onClick={onMapAction}
                   className="min-h-12 flex-1 rounded-lg bg-blue-700 px-3 py-3 text-lg font-semibold text-white hover:bg-blue-800"
                 >
-                  {hasPin ? 'Show on map' : 'Place pin on map'}
+                  {hasPin ? 'Show on map' : 'Place pin'}
                 </button>
               )}
               {onMovePin && hasPin && (

@@ -1,20 +1,22 @@
 export default function Topbar({ demo = false, onGetThis, onSignOut }) {
   return (
-    <header className="bg-white border-b border-gray-200 px-4 py-3 sm:px-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <span className="text-2xl font-bold text-blue-800">PumpCycle</span>
-        {demo && (
-          <>
-            <span className="rounded-full bg-amber-100 text-amber-900 text-sm font-medium px-3 py-1">
-              Live demo — sample data
+    <header className="border-b border-gray-200 bg-white px-4 py-2.5 sm:px-6">
+      <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <span className="text-xl font-bold text-blue-800 sm:text-2xl">PumpCycle</span>
+          {demo && (
+            <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-900 sm:px-3 sm:py-1 sm:text-sm">
+              Live demo
             </span>
-            <button
-              onClick={onGetThis}
-              className="w-full rounded-lg bg-blue-700 hover:bg-blue-800 text-white text-base font-semibold px-5 py-2.5 sm:ml-auto sm:w-auto sm:text-lg"
-            >
-              Get this for your company
-            </button>
-          </>
+          )}
+        </div>
+        {demo && (
+          <button
+            onClick={onGetThis}
+            className="rounded-lg bg-blue-700 px-3.5 py-1.5 text-sm font-semibold text-white hover:bg-blue-800 sm:px-5 sm:py-2.5 sm:text-lg"
+          >
+            Get this for your company
+          </button>
         )}
         {!demo && onSignOut && (
           <button

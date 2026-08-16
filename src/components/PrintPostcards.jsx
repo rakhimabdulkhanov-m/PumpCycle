@@ -18,9 +18,9 @@ export default function PrintPostcards({ customers = [], company = 'PumpCycle Se
   if (pages.length === 0) pages.push([])
 
   return (
-    <div className="fixed inset-0 z-[1300] overflow-y-auto bg-gray-900/80 p-4 text-gray-900 print:static print:inset-auto print:bg-white print:p-0">
+    <div className="fixed inset-0 z-[1300] overflow-y-auto overflow-x-auto bg-gray-900/80 p-4 text-gray-900 print:static print:inset-auto print:bg-white print:p-0">
       {/* Screen toolbar (hidden when printing) */}
-      <div className="mx-auto mb-4 flex max-w-4xl items-center justify-between rounded-xl bg-white p-4 shadow-lg print:hidden">
+      <div className="mx-auto mb-4 flex max-w-4xl flex-wrap items-center justify-between gap-3 rounded-xl bg-white p-4 shadow-lg print:hidden">
         <div>
           <h2 className="text-xl font-bold text-gray-900">Reminder Postcards (4-up)</h2>
           <p className="text-sm text-gray-600">
