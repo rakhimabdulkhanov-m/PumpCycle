@@ -65,7 +65,7 @@ export default function PinPlacer({
 
       {/* Thumb-sized, at the bottom edge, where a hand holding a phone already
           is. Save is the ONLY path to a recorded coordinate. */}
-      <div className="absolute inset-x-0 bottom-0 z-[1200] flex gap-3 bg-white/95 p-3 pb-[calc(env(safe-area-inset-bottom,0px)+0.75rem)] shadow-[0_-2px_10px_rgba(0,0,0,0.25)]">
+      <div className="absolute inset-x-0 bottom-0 z-[1200] flex gap-3 bg-white/95 p-3 pb-[calc(env(safe-area-inset-bottom,0px)+0.75rem)] shadow-[0_-2px_10px_rgba(0,0,0,0.25)] sm:bottom-4 sm:inset-x-auto sm:left-1/2 sm:w-full sm:max-w-lg sm:-translate-x-1/2 sm:rounded-2xl sm:border sm:border-gray-200 sm:pb-3 sm:shadow-2xl">
         <button
           type="button"
           onClick={onCancel}

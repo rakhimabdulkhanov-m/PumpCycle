@@ -839,7 +839,7 @@ export default function MapTab({
             onShow={showNavigation}
             onPlace={placeNavigation}
           />
-          <LayersControl position="topright">
+          <LayersControl position="topleft">
             <LayersControl.BaseLayer checked name="Satellite">
               <TileLayer
                 ref={satelliteRef}
@@ -889,7 +889,7 @@ export default function MapTab({
             title="Locate my position (GPS)"
             aria-label="Locate my position (GPS)"
             className={
-              'absolute top-24 left-2.5 z-[1000] flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-gray-300 bg-white p-2.5 shadow-md hover:bg-gray-50 disabled:opacity-50 ' +
+              'absolute top-36 left-2.5 z-[1000] flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-gray-300 bg-white p-2.5 shadow-md hover:bg-gray-50 disabled:opacity-50 ' +
               (locating ? 'text-blue-600' : 'text-gray-700')
             }
           >

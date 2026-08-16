@@ -161,46 +161,46 @@ export default function DueTab({
           scrollTopRef.current = e.currentTarget.scrollTop
         }}
       >
-        <div className="mx-auto max-w-3xl p-4 sm:p-6">
-          <div className="flex flex-wrap items-start gap-3">
-            <Counter
-              label="Overdue"
-              value={`${overdue.length} — ${money(overdue.length * settings.avgJobPrice)}`}
-              className="bg-red-100 text-red-900"
-            />
-            <Counter
-              label="Due in 30d"
-              value={`${due30.length} — ${money(due30.length * settings.avgJobPrice)}`}
-              className="bg-amber-100 text-amber-900"
-            />
-            <Counter
-              label="Reminders scheduled"
-              value={scheduledCount(customers, sentReminders)}
-              className="bg-blue-100 text-blue-900"
-            />
-            <div className="flex w-full flex-wrap gap-2 sm:ml-auto sm:w-auto sm:flex-col sm:items-end">
+        <div className="mx-auto max-w-5xl p-4 sm:p-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-wrap items-center gap-3">
+              <Counter
+                label="Overdue"
+                value={`${overdue.length} — ${money(overdue.length * settings.avgJobPrice)}`}
+                className="bg-red-100 text-red-900"
+              />
+              <Counter
+                label="Due in 30d"
+                value={`${due30.length} — ${money(due30.length * settings.avgJobPrice)}`}
+                className="bg-amber-100 text-amber-900"
+              />
+              <Counter
+                label="Reminders scheduled"
+                value={scheduledCount(customers, sentReminders)}
+                className="bg-blue-100 text-blue-900"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
               <PriceSettings
                 avgJobPrice={settings.avgJobPrice}
                 onChange={onSetAvgJobPrice}
               />
-              <div className="flex gap-2">
-                {onRequestExport && (
-                  <button
-                    type="button"
-                    onClick={onRequestExport}
-                    className="rounded-lg border-2 border-gray-300 px-3 py-2 text-base font-semibold text-gray-700 hover:bg-gray-100"
-                  >
-                    Export / Print
-                  </button>
-                )}
+              {onRequestExport && (
                 <button
                   type="button"
-                  onClick={onRequestAdd}
-                  className="rounded-lg bg-blue-700 px-4 py-2 text-base font-semibold text-white hover:bg-blue-800"
+                  onClick={onRequestExport}
+                  className="rounded-lg border-2 border-gray-300 px-3 py-2 text-base font-semibold text-gray-700 hover:bg-gray-100"
                 >
-                  + Add customer
+                  Export / Print
                 </button>
-              </div>
+              )}
+              <button
+                type="button"
+                onClick={onRequestAdd}
+                className="rounded-lg bg-blue-700 px-4 py-2 text-base font-semibold text-white hover:bg-blue-800"
+              >
+                + Add customer
+              </button>
             </div>
           </div>
 

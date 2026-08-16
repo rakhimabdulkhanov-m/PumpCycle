@@ -6,8 +6,8 @@ const TABS = [
 
 export default function TabNav({ active, onChange }) {
   return (
-    <nav className="bg-white border-b border-gray-200 px-4 sm:px-6">
-      <div className="flex gap-2">
+    <nav className="border-b border-gray-200 bg-white">
+      <div className="mx-auto flex max-w-5xl gap-2 px-4 sm:px-6">
         {TABS.map((tab) => (
           <button
             key={tab.id}

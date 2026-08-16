@@ -319,7 +319,7 @@ export default function RemindersTab({
   return (
     <div className="relative h-full">
       <div className="h-full overflow-y-auto">
-        <div className="mx-auto max-w-3xl p-4 sm:p-6">
+        <div className="mx-auto max-w-5xl p-4 sm:p-6">
           {settings?.emailEnabled === false && (
             <div
               role="status"

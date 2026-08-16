@@ -103,7 +103,7 @@ export default function ExportModal({
           <label className="block text-sm font-semibold text-gray-700">
             Select customers to include:
           </label>
-          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-5">
             {[
               { id: 'all', label: `All (${counts.all})` },
               { id: 'overdue', label: `Overdue (${counts.overdue})` },

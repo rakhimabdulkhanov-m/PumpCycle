@@ -516,9 +516,35 @@ try {
   logStep(9.2, '4-Up Postcards Print Preview', 'PASS', `Rendered ${postcardCount} postcards. Saved 10_print_postcards_preview.png`)
 
   // -------------------------------------------------------------------------
+  // 10. Desktop Viewport & Responsive Alignment Audit (1440x900)
+  // -------------------------------------------------------------------------
+  console.log('\n--- 10. DESKTOP VIEWPORT & RESPONSIVE ALIGNMENT AUDIT ---')
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(BASE_URL, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(600)
+
+  // 10.1 Desktop Map Tab
+  await page.locator('nav button', { hasText: 'Map' }).click()
+  await page.waitForTimeout(600)
+  await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'desktop_map_tab.png'), fullPage: false })
+  logStep(10.1, 'Desktop Map Tab Layout', 'PASS', 'Saved desktop_map_tab.png')
+
+  // 10.2 Desktop Due Tab
+  await page.locator('nav button', { hasText: 'Due list' }).click()
+  await page.waitForTimeout(600)
+  await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'desktop_due_tab.png'), fullPage: false })
+  logStep(10.2, 'Desktop Due Tab Layout', 'PASS', 'Saved desktop_due_tab.png')
+
+  // 10.3 Desktop Reminders Tab
+  await page.locator('nav button', { hasText: 'Reminders' }).click()
+  await page.waitForTimeout(600)
+  await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'desktop_reminders_tab.png'), fullPage: false })
+  logStep(10.3, 'Desktop Reminders Tab Layout', 'PASS', 'Saved desktop_reminders_tab.png')
+
+  // -------------------------------------------------------------------------
   // Error & Stability Assertions
   // -------------------------------------------------------------------------
-  console.log('\n--- 10. CONSOLE & EXCEPTION AUDIT ---')
+  console.log('\n--- 11. CONSOLE & EXCEPTION AUDIT ---')
   console.log(`Page Errors: ${pageErrors.length}`)
   console.log(`Console Errors: ${consoleErrors.length}`)
   if (pageErrors.length > 0) {
@@ -529,7 +555,7 @@ try {
   }
   assert.equal(pageErrors.length, 0, `Audit policy requires 0 page errors, found ${pageErrors.length}`)
   assert.equal(consoleErrors.length, 0, `Audit policy requires 0 console errors, found ${consoleErrors.length}`)
-  logStep(10, 'Zero Console/Page Errors Policy', 'PASS', '0 unhandled exceptions, 0 console errors')
+  logStep(11, 'Zero Console/Page Errors Policy', 'PASS', '0 unhandled exceptions, 0 console errors')
 
 } catch (err) {
   console.error('\n💥 AUDIT FAILED WITH ERROR:', err)

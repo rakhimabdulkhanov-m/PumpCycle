@@ -1,7 +1,7 @@
 export default function Topbar({ demo = false, onGetThis, onSignOut }) {
   return (
-    <header className="border-b border-gray-200 bg-white px-4 py-2.5 sm:px-6">
-      <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
+    <header className="border-b border-gray-200 bg-white">
+      <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-2 px-4 py-2.5 sm:gap-3 sm:px-6">
         <div className="flex items-center gap-2 sm:gap-3">
           <span className="text-xl font-bold text-blue-800 sm:text-2xl">PumpCycle</span>
           {demo && (
