@@ -59,6 +59,7 @@ export default function PrintPostcards({ customers = [], company = 'PumpCycle Se
               box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
               padding: 0.25in;
               box-sizing: border-box;
+              position: relative;
             }
           }
           @media print {
@@ -77,6 +78,7 @@ export default function PrintPostcards({ customers = [], company = 'PumpCycle Se
               height: 11in;
               padding: 0.25in;
               box-sizing: border-box;
+              position: relative;
               page-break-after: always;
               break-after: page;
             }
@@ -118,8 +120,8 @@ export default function PrintPostcards({ customers = [], company = 'PumpCycle Se
 
         {pages.map((pageCustomers, pageIdx) => (
           <div key={pageIdx} className="postcard-sheet">
-            {/* Calibration Bar for Print Alignment Verification */}
-            <div className="mb-1 flex items-center justify-between text-[8px] text-gray-500 print:text-black">
+            {/* Calibration Bar in top margin (zero vertical flow space) */}
+            <div className="absolute top-1 left-4 right-4 h-3 flex items-center justify-between text-[8px] text-gray-500 print:text-black">
               <span>Sheet {pageIdx + 1} of {pages.length}</span>
               <div className="flex items-center gap-1">
                 <span>1-inch calibration:</span>

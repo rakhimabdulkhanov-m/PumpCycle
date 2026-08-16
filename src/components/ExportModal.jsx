@@ -17,6 +17,27 @@ export default function ExportModal({
 
   const [filter, setFilter] = useState('all')
 
+  const counts = useMemo(() => {
+    let overdue = 0
+    let due30 = 0
+    let due60 = 0
+    let due90 = 0
+    for (const c of customers) {
+      const d = daysUntilDue(c)
+      if (d < 0) overdue += 1
+      if (d >= 0 && d <= 30) due30 += 1
+      if (d >= 0 && d <= 60) due60 += 1
+      if (d >= 0 && d <= 90) due90 += 1
+    }
+    return {
+      all: customers.length,
+      overdue,
+      30: due30,
+      60: due60,
+      90: due90,
+    }
+  }, [customers])
+
   const filteredCustomers = useMemo(() => {
     if (filter === 'all') return customers
     if (filter === 'overdue') return customers.filter((c) => daysUntilDue(c) < 0)
@@ -77,11 +98,11 @@ export default function ExportModal({
           </label>
           <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
             {[
-              { id: 'all', label: `All (${customers.length})` },
-              { id: 'overdue', label: 'Overdue' },
-              { id: '30', label: 'Due in 30d' },
-              { id: '60', label: 'Due in 60d' },
-              { id: '90', label: 'Due in 90d' },
+              { id: 'all', label: `All (${counts.all})` },
+              { id: 'overdue', label: `Overdue (${counts.overdue})` },
+              { id: '30', label: `Due in 30d (${counts[30]})` },
+              { id: '60', label: `Due in 60d (${counts[60]})` },
+              { id: '90', label: `Due in 90d (${counts[90]})` },
             ].map((opt) => (
               <button
                 key={opt.id}

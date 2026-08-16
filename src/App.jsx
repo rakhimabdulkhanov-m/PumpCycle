@@ -346,7 +346,6 @@ function App() {
             onArchiveVisit={archiveVisit}
             onRecordPhoto={recordPhoto}
             onArchivePhoto={archivePhoto}
-            onRequestExport={() => setExportOpen(true)}
             onNavigateCustomer={navigateToCustomer}
           />
         )}
