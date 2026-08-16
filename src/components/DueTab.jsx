@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
 import { daysUntilDue, nextDue, dueStatus, formatDate } from '../lib/dates.js'
 import { scheduledCount } from '../lib/reminders.js'
 import { hasLocation } from '../lib/point.js'
@@ -162,8 +162,8 @@ export default function DueTab({
         }}
       >
         <div className="mx-auto max-w-5xl p-4 sm:p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3 sm:gap-3">
               <Counter
                 label="Overdue"
                 value={`${overdue.length} — ${money(overdue.length * settings.avgJobPrice)}`}
@@ -180,7 +180,7 @@ export default function DueTab({
                 className="bg-blue-100 text-blue-900"
               />
             </div>
-            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+            <div className="flex flex-wrap items-center gap-2 xl:justify-end">
               <PriceSettings
                 avgJobPrice={settings.avgJobPrice}
                 onChange={onSetAvgJobPrice}
@@ -299,3 +299,4 @@ export default function DueTab({
     </div>
   )
 }
+
