@@ -29,6 +29,9 @@ export default function PrintLabels({ customers = [], onClose }) {
           <p className="text-sm text-gray-600">
             {customers.length} {customers.length === 1 ? 'customer' : 'customers'} ({pages.length} {pages.length === 1 ? 'sheet' : 'sheets'} of 30)
           </p>
+          <p className="mt-1 text-xs text-amber-900">
+            <strong>Print tip:</strong> Set Scale to 100% (turn off &ldquo;Fit to page&rdquo;) and uncheck &ldquo;Headers and footers&rdquo;.
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <button

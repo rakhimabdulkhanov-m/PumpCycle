@@ -222,6 +222,7 @@ export default function RemindersTab({
   onArchiveVisit,
   onRecordPhoto,
   onArchivePhoto,
+  onRequestExport,
   onNavigateCustomer,
 }) {
   const [view, setView] = useState('today')
@@ -315,21 +316,32 @@ export default function RemindersTab({
             </div>
           )}
 
-          <div className="mt-4 flex flex-wrap gap-2">
-            {VIEWS.map((v) => (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap gap-2">
+              {VIEWS.map((v) => (
+                <button
+                  key={v.id}
+                  onClick={() => setView(v.id)}
+                  className={
+                    'rounded-full px-4 py-2 text-base font-semibold ' +
+                    (view === v.id
+                      ? 'bg-blue-700 text-white'
+                      : 'border-2 border-gray-300 text-gray-700 hover:bg-gray-100')
+                  }
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
+            {onRequestExport && (
               <button
-                key={v.id}
-                onClick={() => setView(v.id)}
-                className={
-                  'rounded-full px-4 py-2 text-base font-semibold ' +
-                  (view === v.id
-                    ? 'bg-blue-700 text-white'
-                    : 'border-2 border-gray-300 text-gray-700 hover:bg-gray-100')
-                }
+                type="button"
+                onClick={onRequestExport}
+                className="rounded-lg border-2 border-gray-300 px-3 py-2 text-base font-semibold text-gray-700 hover:bg-gray-100"
               >
-                {v.label}
+                Export / Print
               </button>
-            ))}
+            )}
           </div>
 
           {view === 'today' ? (
