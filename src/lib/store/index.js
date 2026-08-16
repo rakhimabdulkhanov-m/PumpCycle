@@ -16,8 +16,27 @@ const neutral = (extra = {}) => emptySnapshot({
   ...extra,
 })
 
+const LAST_BOOTSTRAP_KEY = 'pumpcycle-last-bootstrap'
+
 async function readBootstrap(fetchImpl) {
-  const response = await fetchImpl('/api/bootstrap')
+  let response
+  try {
+    response = await fetchImpl('/api/bootstrap')
+  } catch {
+    // Network is offline. Check if we have a cached bootstrap in localStorage
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const cached = JSON.parse(localStorage.getItem(LAST_BOOTSTRAP_KEY) || 'null')
+        if (cached && ['demo', 'live'].includes(cached.mode)) {
+          return { ...cached, offline: true }
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+    throw new StoreUnavailableError('Network is offline and no cached session was found', 'offline')
+  }
+
   let body
   try {
     body = await response.json()
@@ -30,11 +49,27 @@ async function readBootstrap(fetchImpl) {
       'bootstrap-failed'
     )
   }
+
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(LAST_BOOTSTRAP_KEY, JSON.stringify(body))
+    } catch {
+      // Ignore quota errors
+    }
+  }
+
   return body
 }
 
 async function readJson(fetchImpl, path, init) {
-  const response = await fetchImpl(path, init)
+  let response
+  try {
+    response = await fetchImpl(path, init)
+  } catch (netErr) {
+    const error = new StoreUnavailableError(netErr?.message || 'Network request failed', 'network-failed')
+    error.status = 0
+    throw error
+  }
   let body
   try { body = await response.json() } catch { body = null }
   if (!response.ok || body?.ok === false) {
@@ -111,7 +146,12 @@ export function createStore(options = {}) {
           await readJson(fetchImpl, '/api/auth/session')
           return startApi(bootstrap)
         } catch (error) {
-          if (error.status !== 401) throw error
+          if (error.status !== 401) {
+            if (bootstrap.offline || error.status === 0 || error.code === 'network-failed') {
+              return startApi(bootstrap)
+            }
+            throw error
+          }
           const token = new URLSearchParams(locationSearch).get('t')
           authGate(bootstrap, token ? 'setup-required' : 'auth-required')
           return snapshot

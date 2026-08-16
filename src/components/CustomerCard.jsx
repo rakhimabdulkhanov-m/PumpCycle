@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { nextDue, daysUntilDue, dueStatus, formatDate, isCommercial, todayISO } from '../lib/dates.js'
 import { pinSource } from '../lib/location.js'
+import { hasLocation } from '../lib/point.js'
+import { calculateNavigation, formatAccuracy } from '../lib/navigation.js'
 import { useDismissLayer } from '../lib/dismissLayer.js'
 import { downscaleImage, newPhotoId, newVisitId } from '../lib/photo.js'
 import PhotoStrip from './PhotoStrip.jsx'
@@ -78,9 +80,58 @@ export default function CustomerCard({
     notes: '',
   })
   const [targetVisitIdForPhoto, setTargetVisitIdForPhoto] = useState(null)
+  const [navigating, setNavigating] = useState(false)
+  const [userPosition, setUserPosition] = useState(null)
+  const [userAccuracy, setUserAccuracy] = useState(null)
+  const [navError, setNavError] = useState('')
 
   const bodyRef = useRef(null)
   const fileInputRef = useRef(null)
+  const watchIdRef = useRef(null)
+
+  useEffect(() => {
+    return () => {
+      if (watchIdRef.current !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchIdRef.current)
+        watchIdRef.current = null
+      }
+    }
+  }, [])
+
+  function startNavigation() {
+    setNavigating(true)
+    setNavError('')
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setNavError('Geolocation is not supported on this device.')
+      return
+    }
+    try {
+      watchIdRef.current = navigator.geolocation.watchPosition(
+        (pos) => {
+          setUserPosition({ lat: pos.coords.latitude, lng: pos.coords.longitude })
+          setUserAccuracy(pos.coords.accuracy)
+          setNavError('')
+        },
+        (err) => {
+          setNavError(err.message || 'Could not acquire GPS position.')
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      )
+    } catch (err) {
+      setNavError(err?.message || 'Could not start GPS navigation.')
+    }
+  }
+
+  function stopNavigation() {
+    if (watchIdRef.current !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.clearWatch(watchIdRef.current)
+      watchIdRef.current = null
+    }
+    setNavigating(false)
+    setUserPosition(null)
+    setUserAccuracy(null)
+    setNavError('')
+  }
 
   useEffect(() => {
     if (bodyRef.current) {
@@ -118,6 +169,11 @@ export default function CustomerCard({
 
   const customerPhotos = photos.filter((p) => p.customerId === customer.id && !p.archivedAt)
   const standalonePhotos = customerPhotos.filter((p) => !p.visitId)
+
+  const navData =
+    userPosition && hasLocation(customer)
+      ? calculateNavigation(userPosition, { lat: customer.lat, lng: customer.lng })
+      : null
 
   function startEdit() {
     setDraft({ ...customer })
@@ -367,6 +423,80 @@ export default function CustomerCard({
               </span>
             </Row>
             <Row label="Notes">{customer.notes || '—'}</Row>
+
+            {/* Offline Lid Navigation / GPS Finder */}
+            {hasLocation(customer) && (
+              <div className="my-2 rounded-xl border border-blue-200 bg-blue-50/70 p-3.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-bold uppercase tracking-wide text-blue-900">
+                    Lid Finder (GPS)
+                  </span>
+                  {!navigating ? (
+                    <button
+                      type="button"
+                      onClick={startNavigation}
+                      className="flex min-h-11 items-center justify-center rounded-lg bg-blue-700 px-4 py-2 text-sm font-bold text-white hover:bg-blue-800"
+                    >
+                      Find lid in yard
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={stopNavigation}
+                      className="flex min-h-11 items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                    >
+                      Stop
+                    </button>
+                  )}
+                </div>
+
+                {navigating && (
+                  <div className="mt-3">
+                    {navError ? (
+                      <p className="text-sm font-semibold text-red-700">{navError}</p>
+                    ) : !userPosition ? (
+                      <div className="flex items-center gap-2 text-sm text-blue-800">
+                        <span className="inline-block h-2.5 w-2.5 animate-ping rounded-full bg-blue-600" />
+                        <span>Acquiring GPS fix...</span>
+                      </div>
+                    ) : navData ? (
+                      <div>
+                        {navData.isAtLid ? (
+                          <div className="rounded-lg bg-green-100 p-2.5 text-center font-bold text-green-900">
+                            At lid! ({navData.distanceFormatted})
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-3">
+                            <div
+                              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-blue-700 text-2xl font-bold text-white shadow"
+                              style={{
+                                transform: `rotate(${navData.bearingDegrees}deg)`,
+                                transition: 'transform 0.3s ease',
+                              }}
+                              title={`Heading ${navData.bearingDegrees}°`}
+                            >
+                              ↑
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-lg font-extrabold text-blue-950">
+                                {navData.distanceFormatted} {navData.cardinal}
+                              </div>
+                              <div className="text-xs text-blue-800">
+                                Bearing: {navData.cardinalLong} ({navData.bearingDegrees}°)
+                                {userAccuracy && ` · Accuracy ${formatAccuracy(userAccuracy)}`}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        <p className="mt-2 text-xs text-blue-900/80">
+                          Offline compass & distance based on phone GPS. No cell signal required.
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Standalone Lid Photos Preview */}
             <div className="py-2">

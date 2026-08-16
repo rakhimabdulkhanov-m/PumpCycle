@@ -86,6 +86,16 @@ const DRAFT_ICON = L.divIcon({
   className: 'map-draft-marker',
 })
 
+const USER_POSITION_ICON = L.divIcon({
+  html: `<div style="position:relative;width:24px;height:24px;display:flex;align-items:center;justify-content:center">
+    <span style="position:absolute;width:24px;height:24px;border-radius:9999px;background-color:#3b82f6;opacity:0.4;animation:ping 1.5s cubic-bezier(0,0,0.2,1) infinite;"></span>
+    <span style="width:14px;height:14px;border-radius:9999px;background-color:#1d4ed8;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.3);"></span>
+  </div>`,
+  className: 'user-gps-marker',
+  iconSize: [24, 24],
+  iconAnchor: [12, 12],
+})
+
 // Anything past this is a different part of the country, not the next street:
 // flying it takes 8-10 s of swooping, so jump there instead.
 const FLY_MAX_METERS = 50000
@@ -564,6 +574,8 @@ export default function MapTab({
   // reverts the pin and nothing else that happened in between.
   const [toast, setToast] = useState(null)
   const [writeBusy, setWriteBusy] = useState(false)
+  const [userLocation, setUserLocation] = useState(null)
+  const [locating, setLocating] = useState(false)
   const mapRef = useRef(null)
   const satelliteRef = useRef(null)
   const streetRef = useRef(null)
@@ -606,6 +618,27 @@ export default function MapTab({
   const toggleStatus = useCallback((status) => {
     onStatusVisibilityChange((current) => ({ ...current, [status]: !current[status] }))
   }, [onStatusVisibilityChange])
+
+  const locateUser = useCallback(() => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setToast({ message: 'GPS location is not supported on this device' })
+      return
+    }
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLocating(false)
+        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+        setUserLocation(coords)
+        mapRef.current?.flyTo([coords.lat, coords.lng], 18)
+      },
+      (err) => {
+        setLocating(false)
+        setToast({ message: err.message || 'Could not acquire GPS position' })
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    )
+  }, [])
 
   useEffect(() => {
     if (!toast) return
@@ -844,7 +877,29 @@ export default function MapTab({
           {naming && (
             <Marker position={[newPoint.lat, newPoint.lng]} icon={DRAFT_ICON} interactive={false} />
           )}
+          {userLocation && (
+            <Marker position={[userLocation.lat, userLocation.lng]} icon={USER_POSITION_ICON} interactive={false} />
+          )}
         </MapContainer>
+        {!placing && (
+          <button
+            type="button"
+            onClick={locateUser}
+            disabled={locating}
+            title="Locate my position (GPS)"
+            aria-label="Locate my position (GPS)"
+            className={
+              'absolute top-3 right-3 z-[1000] flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-gray-300 bg-white p-2.5 shadow-md hover:bg-gray-50 disabled:opacity-50 ' +
+              (locating ? 'text-blue-600' : 'text-gray-700')
+            }
+          >
+            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="7" strokeWidth="2" />
+              <circle cx="12" cy="12" r="2" fill="currentColor" />
+              <path strokeWidth="2" strokeLinecap="round" d="M12 2v3m0 14v3M2 12h3m14 0h3" />
+            </svg>
+          </button>
+        )}
         {!placing &&
           (showList ? (
             <NeedsPinList

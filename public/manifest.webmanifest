@@ -1,0 +1,17 @@
+{
+  "name": "PumpCycle",
+  "short_name": "PumpCycle",
+  "description": "Septic pumping schedule, due-date map and customer reminders for pumping companies.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1d4ed8",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
