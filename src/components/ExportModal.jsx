@@ -45,7 +45,12 @@ export default function ExportModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/60 p-4 text-gray-900">
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+      className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/60 p-4 text-gray-900"
+    >
       <div className="w-full max-w-lg rounded-2xl border border-gray-200 bg-white p-6 shadow-2xl sm:p-8">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-gray-200 pb-4">
