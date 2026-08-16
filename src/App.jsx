@@ -6,6 +6,9 @@ import MapTab from './components/MapTab.jsx'
 import DueTab from './components/DueTab.jsx'
 import RemindersTab from './components/RemindersTab.jsx'
 import AddCustomerModal from './components/AddCustomerModal.jsx'
+import ExportModal from './components/ExportModal.jsx'
+import PrintLabels from './components/PrintLabels.jsx'
+import PrintPostcards from './components/PrintPostcards.jsx'
 import { todayISO } from './lib/dates.js'
 import { DEFAULT_MAP_STATUS_VISIBILITY } from './lib/mapScale.js'
 import {
@@ -165,6 +168,19 @@ function App() {
   const [addOpen, setAddOpen] = useState(false)
   const [addDefaults, setAddDefaults] = useState(freshAddCustomerDraft)
   const [addDraft, setAddDraft] = useState(addDefaults)
+  const [exportOpen, setExportOpen] = useState(false)
+  const [printLabelsData, setPrintLabelsData] = useState(() => {
+    if (typeof window !== 'undefined' && window.location.pathname === '/print/labels') {
+      return 'all'
+    }
+    return null
+  })
+  const [printPostcardsData, setPrintPostcardsData] = useState(() => {
+    if (typeof window !== 'undefined' && window.location.pathname === '/print/postcards') {
+      return 'all'
+    }
+    return null
+  })
   // One navigation primitive for every cross-tab customer handoff. It stays in
   // App while Map unmounts and is cleared only by the Map after it has opened
   // the exact card or started the exact placement session.
@@ -307,6 +323,7 @@ function App() {
             onArchivePhoto={archivePhoto}
             onSetAvgJobPrice={setAvgJobPrice}
             onRequestAdd={() => setAddOpen(true)}
+            onRequestExport={() => setExportOpen(true)}
             onNavigateCustomer={navigateToCustomer}
             view={dueView}
             onViewChange={setDueView}
@@ -342,6 +359,38 @@ function App() {
           onClose={() => setAddOpen(false)}
           onDiscard={discardAddDraft}
           mapCenter={mapView.center}
+        />
+      )}
+      {exportOpen && (
+        <ExportModal
+          customers={activeCustomers}
+          onClose={() => setExportOpen(false)}
+          onOpenPrintLabels={(list) => setPrintLabelsData(list)}
+          onOpenPrintPostcards={(list) => setPrintPostcardsData(list)}
+        />
+      )}
+      {printLabelsData && (
+        <PrintLabels
+          customers={printLabelsData === 'all' ? activeCustomers : printLabelsData}
+          onClose={() => {
+            setPrintLabelsData(null)
+            if (typeof window !== 'undefined' && window.location.pathname === '/print/labels') {
+              window.history.replaceState(null, '', '/')
+            }
+          }}
+        />
+      )}
+      {printPostcardsData && (
+        <PrintPostcards
+          customers={printPostcardsData === 'all' ? activeCustomers : printPostcardsData}
+          company={data.company || 'PumpCycle'}
+          phone={data.settings?.companyPhone || ''}
+          onClose={() => {
+            setPrintPostcardsData(null)
+            if (typeof window !== 'undefined' && window.location.pathname === '/print/postcards') {
+              window.history.replaceState(null, '', '/')
+            }
+          }}
         />
       )}
       {mode === 'demo' && (

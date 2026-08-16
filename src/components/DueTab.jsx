@@ -93,6 +93,7 @@ export default function DueTab({
   onArchivePhoto,
   onSetAvgJobPrice,
   onRequestAdd,
+  onRequestExport,
   onNavigateCustomer,
   view,
   onViewChange,
@@ -171,12 +172,24 @@ export default function DueTab({
                 avgJobPrice={settings.avgJobPrice}
                 onChange={onSetAvgJobPrice}
               />
-              <button
-                onClick={onRequestAdd}
-                className="rounded-lg bg-blue-700 px-4 py-2 text-base font-semibold text-white hover:bg-blue-800"
-              >
-                + Add customer
-              </button>
+              <div className="flex gap-2">
+                {onRequestExport && (
+                  <button
+                    type="button"
+                    onClick={onRequestExport}
+                    className="rounded-lg border-2 border-gray-300 px-3 py-2 text-base font-semibold text-gray-700 hover:bg-gray-100"
+                  >
+                    Export / Print
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onRequestAdd}
+                  className="rounded-lg bg-blue-700 px-4 py-2 text-base font-semibold text-white hover:bg-blue-800"
+                >
+                  + Add customer
+                </button>
+              </div>
             </div>
           </div>
 
