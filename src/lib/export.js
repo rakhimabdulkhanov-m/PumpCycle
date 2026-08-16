@@ -29,7 +29,17 @@ export function parseUSAddress(addressStr) {
   const clean = addressStr.trim()
   const parts = clean.split(',').map((p) => p.trim()).filter(Boolean)
   if (parts.length === 0) return { street: '', city: '', state: '', zip: '' }
-  if (parts.length === 1) return { street: parts[0], city: '', state: '', zip: '' }
+  if (parts.length === 1) {
+    // E.g. "1248 Dallas Cherryville Hwy Bessemer City NC 28016" (no commas)
+    const stateZipMatch = clean.match(/\b([A-Za-z]{2})\s+(\d{5}(?:-\d{4})?)$/)
+    if (stateZipMatch) {
+      const state = stateZipMatch[1].toUpperCase()
+      const zip = stateZipMatch[2] || ''
+      const beforeState = clean.slice(0, stateZipMatch.index).trim()
+      return { street: beforeState, city: '', state, zip }
+    }
+    return { street: parts[0], city: '', state: '', zip: '' }
+  }
 
   const street = parts[0]
   let city

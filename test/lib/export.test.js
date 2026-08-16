@@ -72,6 +72,13 @@ describe('src/lib/export.js', () => {
       expect(res.state).toBe('')
       expect(res.zip).toBe('')
     })
+
+    it('extracts state and zip from uncomma single line address', () => {
+      const res = parseUSAddress('1248 Dallas Cherryville Hwy Bessemer City NC 28016')
+      expect(res.street).toBe('1248 Dallas Cherryville Hwy Bessemer City')
+      expect(res.state).toBe('NC')
+      expect(res.zip).toBe('28016')
+    })
   })
 
   describe('parseCustomerName', () => {

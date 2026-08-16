@@ -55,6 +55,7 @@ export default function CustomerCard({
   customer,
   visits = [],
   photos = [],
+  initialEditing = false,
   onClose,
   onUpdate,
   onMarkPumped,
@@ -66,8 +67,8 @@ export default function CustomerCard({
   onMapAction,
 }) {
   const [tab, setTab] = useState('details') // 'details' | 'history'
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(null)
+  const [editing, setEditing] = useState(initialEditing)
+  const [draft, setDraft] = useState(() => (initialEditing ? { ...customer } : null))
   const [savingAction, setSavingAction] = useState(null)
   const [writeError, setWriteError] = useState('')
   const [activePhoto, setActivePhoto] = useState(null)
@@ -638,7 +639,7 @@ export default function CustomerCard({
                 <button
                   type="button"
                   onClick={() => setAddingVisit(true)}
-                  className="rounded-lg bg-blue-50 px-3 py-1.5 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+                  className="flex min-h-11 items-center rounded-lg bg-blue-50 px-3.5 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
                 >
                   + Log Visit
                 </button>
@@ -827,7 +828,7 @@ export default function CustomerCard({
                 onClick={startEdit}
                 className="min-h-12 rounded-lg border border-gray-300 bg-white px-4 py-3 text-lg font-semibold text-gray-800 hover:bg-gray-50"
               >
-                Edit
+                {tab === 'history' ? 'Edit Info' : 'Edit'}
               </button>
             </div>
           </div>

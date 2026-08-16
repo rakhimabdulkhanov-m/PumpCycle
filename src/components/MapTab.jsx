@@ -466,7 +466,7 @@ function Legend({
         <button
           type="button"
           onClick={onShowNeedsPin}
-          className="mt-1 flex w-full items-center gap-2 border-t border-gray-200 pt-1 text-left"
+          className="mt-1 flex min-h-11 w-full items-center gap-2 border-t border-gray-200 px-1 py-1.5 text-left"
         >
           <span className="inline-block h-4 w-4 rounded-full border-2 border-dashed border-gray-400" />
           <span className="text-base font-semibold text-blue-800 underline">
@@ -497,7 +497,7 @@ function NeedsPinList({ customers, onPick, onClose, hiddenOnMobile }) {
         <button
           onClick={onClose}
           aria-label="Close"
-          className="text-3xl leading-none text-gray-400 hover:text-gray-600"
+          className="flex min-h-11 min-w-11 items-center justify-center rounded-lg text-3xl leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-600"
         >
           &times;
         </button>

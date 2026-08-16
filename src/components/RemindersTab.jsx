@@ -227,6 +227,7 @@ export default function RemindersTab({
   const [view, setView] = useState('today')
   const [selectedId, setSelectedId] = useState(null)
   const [cardId, setCardId] = useState(null)
+  const [cardEditing, setCardEditing] = useState(false)
   const [toast, setToast] = useState(null)
   const [saving, setSaving] = useState(false)
   const [beyondOpen, setBeyondOpen] = useState(false)
@@ -321,7 +322,7 @@ export default function RemindersTab({
                 key={v.id}
                 onClick={() => setView(v.id)}
                 className={
-                  'rounded-full px-4 py-2 text-base font-semibold ' +
+                  'flex min-h-11 items-center rounded-full px-5 py-2 text-base font-semibold ' +
                   (view === v.id
                     ? 'bg-blue-700 text-white'
                     : 'border-2 border-gray-300 text-gray-700 hover:bg-gray-100')
@@ -343,7 +344,10 @@ export default function RemindersTab({
                     {visibleNeedsAddress.map(({ customer, message }) => (
                       <button
                         key={customer.id}
-                        onClick={() => setCardId(customer.id)}
+                        onClick={() => {
+                          setCardId(customer.id)
+                          setCardEditing(true)
+                        }}
                         className="flex w-full flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 text-left hover:bg-red-100"
                       >
                         <div className="min-w-0 flex-1">
@@ -483,7 +487,11 @@ export default function RemindersTab({
           customer={cardCustomer}
           visits={visits}
           photos={photos}
-          onClose={() => setCardId(null)}
+          initialEditing={cardEditing}
+          onClose={() => {
+            setCardId(null)
+            setCardEditing(false)
+          }}
           onUpdate={(patch) => onUpdateCustomer(cardCustomer.id, patch)}
           onMarkPumped={() => onMarkPumped(cardCustomer.id)}
           onRecordVisit={onRecordVisit}
