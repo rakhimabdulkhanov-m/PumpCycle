@@ -109,7 +109,7 @@ export function bearingToCardinalLong(bearingDegrees) {
  * Formats distance for display (both US feet/miles and metric meters/km).
  */
 export function formatDistance(distanceMeters) {
-  if (!Number.isFinite(distanceMeters)) return 'Unknown distance'
+  if (!Number.isFinite(distanceMeters) || distanceMeters < 0) return 'Unknown distance'
   const feet = metersToFeet(distanceMeters)
   if (feet < 3) {
     return 'At lid (< 3 ft)'

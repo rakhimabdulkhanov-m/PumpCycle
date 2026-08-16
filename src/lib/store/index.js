@@ -156,7 +156,7 @@ export function createStore(options = {}) {
           return startApi(bootstrap)
         } catch (error) {
           if (error.status !== 401) {
-            if (bootstrap.offline || error.status === 0 || error.code === 'network-failed') {
+            if (bootstrap.offline || error.status === 0 || error.code === 'network-failed' || (typeof error.status === 'number' && error.status >= 500)) {
               return startApi(bootstrap)
             }
             throw error

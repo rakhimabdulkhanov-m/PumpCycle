@@ -95,7 +95,7 @@ export function daysBetween(fromISO, toISOStr) {
 // Commercial (grease-trap) accounts run a tight cycle; residential run 36 months.
 // There is no `type` field — commercial-ness is derived solely from the cycle.
 export function isCommercial(customer) {
-  return customer.cycleMonths <= 3
+  return typeof customer?.cycleMonths === 'number' && customer.cycleMonths > 0 && customer.cycleMonths <= 3
 }
 
 export function nextDue(customer) {

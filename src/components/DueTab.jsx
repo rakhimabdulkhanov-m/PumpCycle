@@ -139,8 +139,8 @@ export default function DueTab({
     .filter(
       (c) =>
         q === '' ||
-        c.name.toLowerCase().includes(q) ||
-        c.address.toLowerCase().includes(q)
+        (c.name || '').toLowerCase().includes(q) ||
+        (c.address || '').toLowerCase().includes(q)
     )
     .sort((a, b) => {
       const dueA = nextDue(a)
@@ -278,6 +278,7 @@ export default function DueTab({
 
       {selected && (
         <CustomerCard
+          key={selected.id}
           customer={selected}
           visits={visits}
           photos={photos}

@@ -47,9 +47,9 @@ export function parseUSAddress(addressStr) {
   let zip
 
   if (parts.length === 2) {
-    // E.g. "123 Main St, NC 28052" or "123 Main St, Gastonia NC"
+    // E.g. "123 Main St, NC 28052" or "123 Main St, Gastonia NC" or "123 Main St, Gastonia"
     const lastPart = parts[1]
-    const stateZipMatch = lastPart.match(/([A-Za-z]{2})\s*(\d{5}(?:-\d{4})?)?$/)
+    const stateZipMatch = lastPart.match(/\b([A-Za-z]{2})(?:[,\s]+(\d{5}(?:-\d{4})?))?$/)
     if (stateZipMatch) {
       state = stateZipMatch[1].toUpperCase()
       zip = stateZipMatch[2] || ''
@@ -60,10 +60,10 @@ export function parseUSAddress(addressStr) {
       zip = ''
     }
   } else {
-    // 3 or more parts: "123 Main St, Gastonia, NC 28052"
+    // 3 or more parts: "123 Main St, Gastonia, NC 28052" or "123 Main St, Gastonia, NC, 28052"
     city = parts[1]
     const stateZipPart = parts.slice(2).join(', ').trim()
-    const match = stateZipPart.match(/^([A-Za-z]{2,})\s*(\d{5}(?:-\d{4})?)?/)
+    const match = stateZipPart.match(/^([A-Za-z]{2,})(?:[,\s]+(\d{5}(?:-\d{4})?))?/)
     if (match) {
       state = match[1].toUpperCase()
       zip = match[2] || ''
@@ -76,6 +76,16 @@ export function parseUSAddress(addressStr) {
   return { street, city, state, zip }
 }
 
+const SUFFIX_SET = new Set([
+  'jr', 'jr.', 'sr', 'sr.',
+  'ii', 'iii', 'iv', 'v',
+  'llc', 'l.l.c.', 'inc', 'inc.', 'corp', 'corp.', 'co', 'co.',
+])
+
+function isSuffix(str) {
+  return SUFFIX_SET.has((str || '').toLowerCase().replace(/,/g, '').trim())
+}
+
 /**
  * Parses a person/company name into { firstName, lastName, displayName }.
  */
@@ -85,8 +95,28 @@ export function parseCustomerName(nameStr) {
   }
   const clean = nameStr.trim()
   if (clean.includes(',')) {
-    // "Smith, John"
-    const [last, ...rest] = clean.split(',')
+    const rawParts = clean.split(',').map((p) => p.trim()).filter(Boolean)
+
+    if (rawParts.length >= 3 && isSuffix(rawParts[rawParts.length - 1])) {
+      const last = rawParts[0]
+      const first = rawParts.slice(1, -1).join(' ')
+      const suffix = rawParts[rawParts.length - 1]
+      return { firstName: first, lastName: `${last}, ${suffix}`, displayName: clean }
+    }
+
+    if (rawParts.length === 2 && isSuffix(rawParts[1])) {
+      const base = rawParts[0]
+      const suffix = rawParts[1]
+      const words = base.split(/\s+/)
+      if (words.length === 1) {
+        return { firstName: words[0], lastName: suffix, displayName: clean }
+      }
+      const firstName = words.slice(0, -1).join(' ')
+      const lastName = `${words[words.length - 1]}, ${suffix}`
+      return { firstName, lastName, displayName: clean }
+    }
+
+    const [last, ...rest] = rawParts
     const first = rest.join(' ').trim()
     return { firstName: first, lastName: last.trim(), displayName: clean }
   }

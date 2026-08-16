@@ -93,18 +93,12 @@ export default function CustomerCard({
 
   useEffect(() => {
     return () => {
-      if (watchIdRef.current !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
-        navigator.geolocation.clearWatch(watchIdRef.current)
-        watchIdRef.current = null
-      }
+      stopNavigation()
     }
   }, [])
 
-  useEffect(() => {
-    stopNavigation()
-  }, [customer?.id])
-
   function startNavigation() {
+    stopNavigation()
     setNavigating(true)
     setNavError('')
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
@@ -139,6 +133,34 @@ export default function CustomerCard({
     setNavError('')
   }
 
+  function isVisitDirty() {
+    return (
+      Boolean(visitDraft.notes) ||
+      Boolean(visitDraft.price) ||
+      Boolean(visitDraft.tech) ||
+      Boolean(visitDraft.gallons && String(visitDraft.gallons) !== String(customer?.tankSizeGal || ''))
+    )
+  }
+
+  function isEditDirty() {
+    return Boolean(draft && Object.keys(draft).some((k) => draft[k] !== customer?.[k]))
+  }
+
+  function confirmDiscardIfDirty(callback) {
+    if (addingVisit && isVisitDirty()) {
+      if (typeof window !== 'undefined' && !window.confirm('Discard unsaved visit notes?')) {
+        return
+      }
+      setAddingVisit(false)
+    } else if (editing && isEditDirty()) {
+      if (typeof window !== 'undefined' && !window.confirm('Discard unsaved customer changes?')) {
+        return
+      }
+      setEditing(false)
+    }
+    callback?.()
+  }
+
   useEffect(() => {
     if (bodyRef.current) {
       bodyRef.current.scrollTop = 0
@@ -149,19 +171,9 @@ export default function CustomerCard({
     if (activePhoto) {
       setActivePhoto(null)
     } else if (addingVisit) {
-      const isDirty =
-        Boolean(visitDraft.notes) ||
-        Boolean(visitDraft.price) ||
-        Boolean(visitDraft.tech) ||
-        Boolean(visitDraft.gallons && String(visitDraft.gallons) !== String(customer.tankSizeGal || ''))
-      if (!isDirty || (typeof window !== 'undefined' && window.confirm('Discard unsaved visit notes?'))) {
-        setAddingVisit(false)
-      }
+      confirmDiscardIfDirty(() => setAddingVisit(false))
     } else if (editing) {
-      const isDirty = draft && Object.keys(draft).some((k) => draft[k] !== customer[k])
-      if (!isDirty || (typeof window !== 'undefined' && window.confirm('Discard unsaved customer changes?'))) {
-        setEditing(false)
-      }
+      confirmDiscardIfDirty(() => setEditing(false))
     } else {
       onClose()
     }
@@ -305,7 +317,8 @@ export default function CustomerCard({
         id: photoId,
         customerId: customer.id,
         visitId: targetVisitIdForPhoto || null,
-        dataUrl: processed.dataUrl,
+        r2Key: '',
+        contentType: 'image/jpeg',
         bytes: processed.bytes,
         width: processed.width,
         height: processed.height,
@@ -335,7 +348,7 @@ export default function CustomerCard({
           )}
         </div>
         <button
-          onClick={onClose}
+          onClick={() => confirmDiscardIfDirty(onClose)}
           aria-label="Close"
           className="flex min-h-11 min-w-11 -mr-2 -mt-2 items-center justify-center rounded-lg text-3xl leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-600"
         >
@@ -349,8 +362,10 @@ export default function CustomerCard({
           <button
             type="button"
             onClick={() => {
-              setTab('details')
-              setAddingVisit(false)
+              confirmDiscardIfDirty(() => {
+                setTab('details')
+                setAddingVisit(false)
+              })
             }}
             className={`min-h-11 flex-1 py-2 text-center text-base font-bold transition-colors ${
               tab === 'details'
@@ -362,7 +377,9 @@ export default function CustomerCard({
           </button>
           <button
             type="button"
-            onClick={() => setTab('history')}
+            onClick={() => {
+              confirmDiscardIfDirty(() => setTab('history'))
+            }}
             className={`min-h-11 flex-1 py-2 text-center text-base font-bold transition-colors ${
               tab === 'history'
                 ? 'rounded-t-lg border-b-2 border-blue-600 bg-white text-blue-700 shadow-sm'
@@ -479,7 +496,7 @@ export default function CustomerCard({
                       <div>
                         {navData.isAtLid ? (
                           <div className="rounded-lg bg-green-100 p-2.5 text-center font-bold text-green-900">
-                            At lid! ({navData.distanceFormatted})
+                            {navData.distanceFeet < 3 ? 'At lid! (< 3 ft)' : `At lid! (${navData.distanceFormatted})`}
                           </div>
                         ) : (
                           <div className="flex items-center gap-3">
@@ -709,7 +726,7 @@ export default function CustomerCard({
                 <div className="mt-3 flex justify-end gap-2">
                   <button
                     type="button"
-                    onClick={() => setAddingVisit(false)}
+                    onClick={() => confirmDiscardIfDirty(() => setAddingVisit(false))}
                     className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-semibold text-gray-700 hover:bg-gray-50"
                   >
                     Cancel
@@ -849,7 +866,7 @@ export default function CustomerCard({
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={() => setEditing(false)}
+              onClick={() => confirmDiscardIfDirty(() => setEditing(false))}
               disabled={!!savingAction}
               className="min-h-12 flex-1 rounded-lg border border-gray-300 bg-white px-4 py-3 text-lg font-semibold text-gray-800 hover:bg-gray-50 disabled:opacity-60"
             >

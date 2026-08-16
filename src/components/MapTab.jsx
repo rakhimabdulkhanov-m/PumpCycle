@@ -948,6 +948,7 @@ export default function MapTab({
       </div>
       {selected && !placing && (
         <CustomerCard
+          key={selected.id}
           customer={selected}
           visits={visits}
           photos={photos}

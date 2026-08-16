@@ -94,6 +94,12 @@ describe('navigation calculations', () => {
 
     // Over 1 mile (e.g. 2000 meters = 1.2 mi (2.0 km))
     expect(formatDistance(2000)).toBe('1.2 mi (2.0 km)')
+
+    // Invalid or negative distance
+    expect(formatDistance(NaN)).toBe('Unknown distance')
+    expect(formatDistance(-5)).toBe('Unknown distance')
+    expect(formatDistance(null)).toBe('Unknown distance')
+    expect(formatDistance(Infinity)).toBe('Unknown distance')
   })
 
   it('formats GPS accuracy correctly', () => {

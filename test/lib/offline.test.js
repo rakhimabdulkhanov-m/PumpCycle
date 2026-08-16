@@ -94,4 +94,51 @@ describe('offline & PWA layer', () => {
       globalThis.localStorage = originalLocalStorage
     }
   })
+
+  it('createStore falls back to offline store when session endpoint returns 500/502/504', async () => {
+    const fetchImpl = async (url) => {
+      if (url === '/api/bootstrap') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ ok: true, mode: 'live', company: 'Hawkins Septic', timezone: 'America/New_York' }),
+        }
+      }
+      if (url === '/api/auth/session') {
+        return {
+          ok: false,
+          status: 502,
+          json: async () => ({ error: 'Bad Gateway' }),
+        }
+      }
+      throw new Error(`Unexpected url: ${url}`)
+    }
+
+    const fakeApiStore = {
+      init: async () => {},
+      getSnapshot: () => ({
+        mode: 'live',
+        company: 'Hawkins Septic',
+        storeStatus: 'offline',
+        customers: [{ id: 'c1', name: 'Bob', address: '123 Main' }],
+        pendingCount: 0,
+      }),
+      getMode: () => 'live',
+      subscribe: () => () => {},
+      destroy: () => {},
+    }
+
+    const store = createStore({
+      fetch: fetchImpl,
+      apiLoader: async () => ({
+        createApiStore: () => fakeApiStore,
+      }),
+    })
+
+    await store.init()
+    expect(store.getMode()).toBe('live')
+    const snapshot = store.getSnapshot()
+    expect(snapshot.company).toBe('Hawkins Septic')
+    expect(snapshot.customers.length).toBe(1)
+  })
 })

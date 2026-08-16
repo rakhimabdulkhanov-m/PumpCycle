@@ -28,7 +28,7 @@ function firstName(name) {
 
 // Only texts are previewed: the emails write themselves in the Worker and are
 // never composed here.
-function messageText(customer, company = 'Hawkins Septic', phone = '(704) 922-0440') {
+function messageText(customer, company = 'PumpCycle', phone = '') {
   const due = formatDate(nextDue(customer))
   const sender = (company || 'PumpCycle').trim()
   const callPhone = (phone || '').trim()
@@ -220,6 +220,7 @@ function DayBlock({ day, onOpenText }) {
 }
 
 export default function RemindersTab({
+  company,
   customers,
   visits = [],
   photos = [],
@@ -490,8 +491,8 @@ export default function RemindersTab({
           customer={selectedCustomer}
           warning={warning}
           saving={saving}
-          company={settings?.companyName || 'Hawkins Septic'}
-          phone={settings?.companyPhone || '(704) 922-0440'}
+          company={settings?.companyName || company || 'PumpCycle'}
+          phone={settings?.companyPhone || ''}
           onMarkSent={() => markSent(selected, selectedCustomer)}
           onCopy={copyMessage}
           onClose={() => setSelectedId(null)}
@@ -499,6 +500,7 @@ export default function RemindersTab({
       )}
       {cardCustomer && (
         <CustomerCard
+          key={cardCustomer.id}
           customer={cardCustomer}
           visits={visits}
           photos={photos}

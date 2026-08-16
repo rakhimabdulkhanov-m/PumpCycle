@@ -331,6 +331,7 @@ function App() {
         )}
         {tab === 'reminders' && (
           <RemindersTab
+            company={data.company}
             customers={activeCustomers}
             visits={data.visits || []}
             photos={data.photos || []}

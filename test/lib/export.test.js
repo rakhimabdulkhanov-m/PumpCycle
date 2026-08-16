@@ -65,6 +65,22 @@ describe('src/lib/export.js', () => {
       expect(res.zip).toBe('28052')
     })
 
+    it('parses 2-part address with city only and avoids false state suffix match', () => {
+      const res = parseUSAddress('123 Main St, Gastonia')
+      expect(res.street).toBe('123 Main St')
+      expect(res.city).toBe('Gastonia')
+      expect(res.state).toBe('')
+      expect(res.zip).toBe('')
+    })
+
+    it('parses 4-part address with comma separated state and zip', () => {
+      const res = parseUSAddress('123 Main St, Gastonia, NC, 28052')
+      expect(res.street).toBe('123 Main St')
+      expect(res.city).toBe('Gastonia')
+      expect(res.state).toBe('NC')
+      expect(res.zip).toBe('28052')
+    })
+
     it('handles single part address gracefully', () => {
       const res = parseUSAddress('123 Main St')
       expect(res.street).toBe('123 Main St')
@@ -110,6 +126,28 @@ describe('src/lib/export.js', () => {
       const res = parseCustomerName('Hank')
       expect(res.firstName).toBe('Hank')
       expect(res.lastName).toBe('')
+    })
+
+    it('handles name suffixes without inverting', () => {
+      const res1 = parseCustomerName('John Smith, Jr.')
+      expect(res1.firstName).toBe('John')
+      expect(res1.lastName).toBe('Smith, Jr.')
+
+      const res2 = parseCustomerName('Smith, John, Jr.')
+      expect(res2.firstName).toBe('John')
+      expect(res2.lastName).toBe('Smith, Jr.')
+
+      const res3 = parseCustomerName('Smith, Jr.')
+      expect(res3.firstName).toBe('Smith')
+      expect(res3.lastName).toBe('Jr.')
+
+      const res4 = parseCustomerName('Acme Pumping, LLC')
+      expect(res4.firstName).toBe('Acme')
+      expect(res4.lastName).toBe('Pumping, LLC')
+
+      const res5 = parseCustomerName('Acme, LLC')
+      expect(res5.firstName).toBe('Acme')
+      expect(res5.lastName).toBe('LLC')
     })
   })
 
