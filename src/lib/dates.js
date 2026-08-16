@@ -122,13 +122,14 @@ export function nextDue(customer) {
 // tenant's local date so a send decision is never made against UTC.
 export function daysUntilDue(customer, today) {
   const due = nextDue(customer)
-  if (!due) return Number.NEGATIVE_INFINITY
+  if (!due) return null
   return Math.round((due - startOfDay(today)) / 86400000)
 }
 
-// 'overdue' | 'due-soon' (within 60 days) | 'ok'
+// 'overdue' | 'due-soon' (within 60 days) | 'ok' | 'unknown'
 export function dueStatus(customer, today) {
   const days = daysUntilDue(customer, today)
+  if (days === null || !Number.isFinite(days)) return 'unknown'
   if (days < 0) return 'overdue'
   if (days <= 60) return 'due-soon'
   return 'ok'

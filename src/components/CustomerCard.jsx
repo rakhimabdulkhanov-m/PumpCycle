@@ -12,6 +12,7 @@ const STATUS_STYLES = {
   overdue: 'bg-red-100 text-red-800',
   'due-soon': 'bg-amber-100 text-amber-800',
   ok: 'bg-green-100 text-green-800',
+  unknown: 'bg-gray-100 text-gray-700',
 }
 
 function Row({ label, children }) {
@@ -148,9 +149,19 @@ export default function CustomerCard({
     if (activePhoto) {
       setActivePhoto(null)
     } else if (addingVisit) {
-      setAddingVisit(false)
+      const isDirty =
+        Boolean(visitDraft.notes) ||
+        Boolean(visitDraft.price) ||
+        Boolean(visitDraft.tech) ||
+        Boolean(visitDraft.gallons && String(visitDraft.gallons) !== String(customer.tankSizeGal || ''))
+      if (!isDirty || (typeof window !== 'undefined' && window.confirm('Discard unsaved visit notes?'))) {
+        setAddingVisit(false)
+      }
     } else if (editing) {
-      setEditing(false)
+      const isDirty = draft && Object.keys(draft).some((k) => draft[k] !== customer[k])
+      if (!isDirty || (typeof window !== 'undefined' && window.confirm('Discard unsaved customer changes?'))) {
+        setEditing(false)
+      }
     } else {
       onClose()
     }
@@ -748,7 +759,7 @@ export default function CustomerCard({
                         )}
                         {visit.priceCents > 0 && (
                           <div className="text-sm font-semibold text-green-700">
-                            ${(visit.priceCents / 100).toFixed(0)}
+                            ${(visit.priceCents / 100).toFixed(visit.priceCents % 100 === 0 ? 0 : 2)}
                           </div>
                         )}
                       </div>
@@ -824,12 +835,14 @@ export default function CustomerCard({
                   Move pin
                 </button>
               )}
-              <button
-                onClick={startEdit}
-                className="min-h-12 rounded-lg border border-gray-300 bg-white px-4 py-3 text-lg font-semibold text-gray-800 hover:bg-gray-50"
-              >
-                {tab === 'history' ? 'Edit Info' : 'Edit'}
-              </button>
+              {tab === 'details' && (
+                <button
+                  onClick={startEdit}
+                  className="min-h-12 rounded-lg border border-gray-300 bg-white px-4 py-3 text-lg font-semibold text-gray-800 hover:bg-gray-50"
+                >
+                  Edit
+                </button>
+              )}
             </div>
           </div>
         ) : (

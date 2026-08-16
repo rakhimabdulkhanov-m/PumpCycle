@@ -8,10 +8,10 @@ describe('unknown pump dates', () => {
     email: 'owner@example.com', phone: '7045550100',
   }
 
-  it('renders safely, stays actionable as overdue, and schedules no reminders', () => {
+  it('renders safely, returns null days and unknown status, and schedules no reminders', () => {
     expect(nextDue(customer)).toBeNull()
-    expect(daysUntilDue(customer)).toBe(Number.NEGATIVE_INFINITY)
-    expect(dueStatus(customer)).toBe('overdue')
+    expect(daysUntilDue(customer)).toBeNull()
+    expect(dueStatus(customer)).toBe('unknown')
     expect(formatDate(null)).toBe('Unknown')
     expect(shiftISO(null, 1)).toBeNull()
     expect(remindersFor(customer)).toEqual([])

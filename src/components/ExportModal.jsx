@@ -24,10 +24,12 @@ export default function ExportModal({
     let due90 = 0
     for (const c of customers) {
       const d = daysUntilDue(c)
-      if (d < 0) overdue += 1
-      if (d >= 0 && d <= 30) due30 += 1
-      if (d >= 0 && d <= 60) due60 += 1
-      if (d >= 0 && d <= 90) due90 += 1
+      if (d !== null && Number.isFinite(d)) {
+        if (d < 0) overdue += 1
+        if (d >= 0 && d <= 30) due30 += 1
+        if (d >= 0 && d <= 60) due60 += 1
+        if (d >= 0 && d <= 90) due90 += 1
+      }
     }
     return {
       all: customers.length,
@@ -40,12 +42,17 @@ export default function ExportModal({
 
   const filteredCustomers = useMemo(() => {
     if (filter === 'all') return customers
-    if (filter === 'overdue') return customers.filter((c) => daysUntilDue(c) < 0)
+    if (filter === 'overdue') {
+      return customers.filter((c) => {
+        const d = daysUntilDue(c)
+        return d !== null && Number.isFinite(d) && d < 0
+      })
+    }
     const days = Number(filter)
     if (Number.isFinite(days)) {
       return customers.filter((c) => {
         const d = daysUntilDue(c)
-        return d >= 0 && d <= days
+        return d !== null && Number.isFinite(d) && d >= 0 && d <= days
       })
     }
     return customers

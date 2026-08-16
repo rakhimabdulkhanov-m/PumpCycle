@@ -41,36 +41,31 @@ Each customer: `phone` + optional `email` (both may be empty). Dates auto-shift 
 goes stale.
 
 1. **Map** - two tile layers (Esri satellite default, OSM alternate), both attributed.
-   Pins: green / yellow (due <=60d) / red (overdue). Click pin -> card with name, address,
-   phone (tel:), email (mailto:), tank size, last pumped, cycle, next due, notes.
-   Commercial cards: "Commercial - Grease trap" badge. Overdue cards: reach-out strip with
-   Call/Email links. Buttons: [Mark pumped today] [Edit].
-   Pin placement flow (same on desktop and mobile): a fixed crosshair in the middle of the
-   map, the map moves under it, nothing on the map is draggable. Entered from the "+ Drop lid
-   pin" FAB (new customer) or "Move pin"/"Place pin" on a customer's card. Only the Save
-   button writes a coordinate, and only at zoom >= 18 and after the map has actually moved
-   (a settled pin may be confirmed where it stands). Saving stamps precision `manual` +
-   locationConfirmedAt; for an existing customer a 10-second Undo toast puts the old pin back.
-   For a new customer, Save holds the spot and a panel takes service type + name, then
-   creates a real customer via addCustomer.
+   Scale rendering: clusters at zoom <=12, canvas dots at 13-16, exact DOM teardrops at >=17.
+   Pins: green / yellow (due <=60d) / red (overdue) / gray (unknown pump date). Solid = confirmed lid; hollow = unconfirmed town/road centroid.
+   Customer card: [Details | History] segmented control.
+   - Details: phone (tel:), email (mailto:), tank size, cycle, notes, standalone lid photos, and offline GPS Lid Finder with heading arrow.
+   - History: pumping visit log (date, gallons, price, tech, notes) and service photos.
+   Commercial cards: "Commercial - Grease trap" badge. Overdue cards: reach-out strip with Call/Text/Email links. Bottom bar: [Mark pumped today] [Show on map] [Move pin] [Edit].
+   Pin placement flow: fixed crosshair in center, map moves underneath, zoom >= 18 floor, 10s undo toast.
 
-2. **Due list** - sorted by next due, filters Overdue/30/60/90, name/address search.
+2. **Due list** - sorted by next due, filters Overdue/30/60/90/All, name/address search.
    Top counters: Overdue N - $X, Due in 30d N - $X, Reminders scheduled N.
    Revenue = count x avg job price (default $450, editable via settings popover).
+   Export / Print button -> modal for Customer CSV, QuickBooks Contact CSV, Avery 5160 labels (3x10), and 4-up postcards.
 
-3. **Reminders** - queue of upcoming reminders by contact channel. Email if customer has email;
-   SMS if customer has phone; both -> two rows; neither -> no reminder. Sent items move to Sent
-   filter. Overdue customers currently drop out of the queue entirely - a separate od1/od2/od3
-   overdue rule is planned but NOT built yet, so today the most urgent customers are the ones
-   the system never contacts.
-   Email: residential 60d before due, commercial 15d before due.
-   SMS: 14d before due. Desktop "Copy text"; mobile "Copy text" + "Text from my phone" (sms:
-   link). Manual "Mark as sent". Caption: "One tap sends from your phone."
-   Message text adapts: commercial uses FOG/grease-trap/90-day wording; residential plain.
+3. **Reminders** - queue of upcoming reminders by contact channel.
+   - Pinned top section: "Needs a good email address" for bounced emails with 1-tap "Fix" button.
+   - Today section: manual SMS texts to send vs automatic 9:00 AM email sends.
+   - Next 7 days upcoming view.
+   - "Everything beyond" collapsible view by month.
+   - Sent tab: full delivery audit history.
+   - Email: residential 60d before due, commercial 15d before due; automated overdue ladder (+7/+30/+90d residential, +3/+10/+21d commercial).
+   - SMS: 14d before due. "Copy text" + "Text from my phone" (sms: link). 30-day repeat warning.
 
 Topbar: "PumpCycle" logo - badge "Live demo - sample data" - "Get this for your company"
 button -> modal with offer ($500 setup + $99/mo) + form (Name, Email or phone, hidden honeypot)
--> POSTs to /api/lead (demo hosts only; returns 404 on a live client host).
+-> POSTs to /api/lead (demo hosts only; returns 404 on a live client host). Sign out button on live host.
 
 ## Rules that bind
 

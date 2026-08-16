@@ -20,6 +20,7 @@ const CHIP_STYLES = {
 
 function matchesFilter(filter, days) {
   if (filter === 'all') return true
+  if (days === null || !Number.isFinite(days)) return false
   if (filter === 'overdue') return days < 0
   return days >= 0 && days <= Number(filter)
 }
@@ -123,10 +124,13 @@ export default function DueTab({
 
   const selected = customers.find((c) => c.id === selectedId)
 
-  const overdue = customers.filter((c) => daysUntilDue(c) < 0)
+  const overdue = customers.filter((c) => {
+    const d = daysUntilDue(c)
+    return d !== null && Number.isFinite(d) && d < 0
+  })
   const due30 = customers.filter((c) => {
     const d = daysUntilDue(c)
-    return d >= 0 && d <= 30
+    return d !== null && Number.isFinite(d) && d >= 0 && d <= 30
   })
 
   const q = searchQuery.trim().toLowerCase()
@@ -138,7 +142,14 @@ export default function DueTab({
         c.name.toLowerCase().includes(q) ||
         c.address.toLowerCase().includes(q)
     )
-    .sort((a, b) => nextDue(a) - nextDue(b))
+    .sort((a, b) => {
+      const dueA = nextDue(a)
+      const dueB = nextDue(b)
+      if (!dueA && !dueB) return a.name.localeCompare(b.name)
+      if (!dueA) return 1
+      if (!dueB) return -1
+      return dueA - dueB
+    })
   const visibleRows = rows.slice(0, Math.min(limit, 100))
 
   return (

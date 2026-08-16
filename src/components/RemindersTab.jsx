@@ -15,8 +15,6 @@ import { useDismissLayer } from '../lib/dismissLayer.js'
 import CustomerCard from './CustomerCard.jsx'
 import { hasLocation } from '../lib/point.js'
 
-const COMPANY_PHONE = '(704) 922-0440'
-
 const NEEDS_ADDRESS_PREVIEW = 5
 
 const VIEWS = [
@@ -30,20 +28,26 @@ function firstName(name) {
 
 // Only texts are previewed: the emails write themselves in the Worker and are
 // never composed here.
-function messageText(customer) {
+function messageText(customer, company = 'Hawkins Septic', phone = '(704) 922-0440') {
   const due = formatDate(nextDue(customer))
+  const sender = (company || 'PumpCycle').trim()
+  const callPhone = (phone || '').trim()
+  const phoneSnippet = callPhone ? ` Call or text ${callPhone} to schedule.` : ''
+
   if (isCommercial(customer)) {
     const cycleDays = customer.cycleMonths * 30
     return (
-      `Hawkins Septic: ${customer.name} grease trap is due for its ${cycleDays}-day ` +
-      `pump-out by ${due} to stay compliant. Call or text ${COMPANY_PHONE} ` +
-      `to schedule. Reply STOP to opt out.`
+      `${sender}: ${customer.name} grease trap is due for its ${cycleDays}-day ` +
+      `pump-out by ${due} to stay compliant.${phoneSnippet} ` +
+      `Reply STOP to opt out.`
     )
   }
+  const callLine = callPhone
+    ? ` Call or text ${callPhone} to get on the schedule.`
+    : ' Contact us to get on the schedule.'
   return (
-    `Hawkins Septic: Hi ${firstName(customer.name)}, your septic tank is due ` +
-    `for pumping around ${due}. Call or text ${COMPANY_PHONE} to get on the ` +
-    `schedule. Reply STOP to opt out.`
+    `${sender}: Hi ${firstName(customer.name)}, your septic tank is due ` +
+    `for pumping around ${due}.${callLine} Reply STOP to opt out.`
   )
 }
 
@@ -76,9 +80,18 @@ function Quiet({ children }) {
  * One guard entry for the whole stack - the repeat question opens as a second
  * layer, never as a second history entry.
  */
-function PreviewPanel({ customer, warning, saving, onMarkSent, onCopy, onClose }) {
+function PreviewPanel({
+  customer,
+  warning,
+  saving,
+  company,
+  phone,
+  onMarkSent,
+  onCopy,
+  onClose,
+}) {
   const [confirming, setConfirming] = useState(false)
-  const message = messageText(customer)
+  const message = messageText(customer, company, phone)
   const isTouch = window.matchMedia('(pointer: coarse)').matches
   const smsHref = `sms:${customer.phone.replace(/\D/g, '')}?&body=${encodeURIComponent(message)}`
 
@@ -477,6 +490,8 @@ export default function RemindersTab({
           customer={selectedCustomer}
           warning={warning}
           saving={saving}
+          company={settings?.companyName || 'Hawkins Septic'}
+          phone={settings?.companyPhone || '(704) 922-0440'}
           onMarkSent={() => markSent(selected, selectedCustomer)}
           onCopy={copyMessage}
           onClose={() => setSelectedId(null)}
