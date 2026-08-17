@@ -46,16 +46,18 @@ export default function LeadModal({ open, onClose }) {
           <button
             onClick={onClose}
             aria-label="Close"
-            className="flex min-h-11 min-w-11 -mr-2 -mt-2 items-center justify-center rounded-lg text-3xl leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+            className="flex min-h-11 min-w-11 -mr-2 -mt-2 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600"
           >
-            &times;
+            <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-6 pt-2">
         {status === 'done' ? (
           <p className="mt-4 text-lg text-gray-700">
-            Thanks — got it! I'll get back to you within a day.
+            Thanks - got it! I'll get back to you within a day.
           </p>
         ) : (
           <form onSubmit={submit}>
@@ -104,8 +106,7 @@ export default function LeadModal({ open, onClose }) {
 
             {status === 'error' && (
               <p className="mt-3 text-base text-red-700">
-                Something went wrong — please try again, or just reply to my
-                email.
+                Something went wrong - please try again.
               </p>
             )}
 
@@ -116,9 +117,6 @@ export default function LeadModal({ open, onClose }) {
             >
               {status === 'sending' ? 'Sending…' : 'Send'}
             </button>
-            <p className="mt-3 text-center text-base text-gray-500">
-              …or just reply to my email.
-            </p>
           </form>
         )}
         </div>

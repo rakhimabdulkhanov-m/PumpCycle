@@ -166,12 +166,12 @@ export default function DueTab({
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3 sm:gap-3">
               <Counter
                 label="Overdue"
-                value={`${overdue.length} — ${money(overdue.length * settings.avgJobPrice)}`}
+                value={`${overdue.length} - ${money(overdue.length * settings.avgJobPrice)}`}
                 className="bg-red-100 text-red-900"
               />
               <Counter
                 label="Due in 30d"
-                value={`${due30.length} — ${money(due30.length * settings.avgJobPrice)}`}
+                value={`${due30.length} - ${money(due30.length * settings.avgJobPrice)}`}
                 className="bg-amber-100 text-amber-900"
               />
               <Counter

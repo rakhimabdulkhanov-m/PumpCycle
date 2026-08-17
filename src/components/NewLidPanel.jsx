@@ -4,10 +4,12 @@
  * "Move the pin" goes back to the crosshair with the typing intact.
  */
 export default function NewLidPanel({
-  draftType,
+  draftType = 'residential',
   onPickType,
   name,
   onName,
+  phone = '',
+  onPhone,
   address,
   onAddress,
   canSave,
@@ -15,6 +17,7 @@ export default function NewLidPanel({
   onBack,
   onCancel,
 }) {
+  const selectedType = draftType || 'residential'
   const block = (active) =>
     'w-full text-left p-4 rounded-xl border-2 ' +
     (active ? 'border-blue-600 bg-blue-50 text-blue-900' : 'border-gray-200')
@@ -26,9 +29,11 @@ export default function NewLidPanel({
         <button
           onClick={onCancel}
           aria-label="Close"
-          className="flex min-h-11 min-w-11 -mr-2 -mt-2 items-center justify-center rounded-lg text-3xl leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+          className="flex min-h-11 min-w-11 -mr-2 -mt-2 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600"
         >
-          &times;
+          <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
+          </svg>
         </button>
       </div>
 
@@ -40,17 +45,17 @@ export default function NewLidPanel({
           <button
             type="button"
             onClick={() => onPickType('residential')}
-            className={block(draftType === 'residential')}
+            className={block(selectedType === 'residential')}
           >
-            <div className="text-lg font-bold">Residential — 3-Year Cycle</div>
+            <div className="text-lg font-bold">Residential - 3-Year Cycle</div>
             <div className="text-sm text-gray-600">Standard home septic tank</div>
           </button>
           <button
             type="button"
             onClick={() => onPickType('commercial')}
-            className={block(draftType === 'commercial')}
+            className={block(selectedType === 'commercial')}
           >
-            <div className="text-lg font-bold">Commercial Grease Trap — 90-Day Cycle</div>
+            <div className="text-lg font-bold">Commercial Grease Trap - 90-Day Cycle</div>
             <div className="text-sm text-gray-600">
               FOG interceptor on a 90-day municipal cycle
             </div>
@@ -62,6 +67,13 @@ export default function NewLidPanel({
           onChange={(e) => onName(e.target.value)}
           placeholder="Customer name"
           className="mt-4 w-full rounded-lg border-2 border-gray-300 px-4 py-3 text-lg"
+        />
+        <input
+          type="tel"
+          value={phone}
+          onChange={(e) => onPhone?.(e.target.value)}
+          placeholder="Phone (optional)"
+          className="mt-3 w-full rounded-lg border-2 border-gray-300 px-4 py-3 text-lg"
         />
         <input
           value={address}
@@ -80,19 +92,19 @@ export default function NewLidPanel({
           Move the pin
         </button>
         <div className="flex gap-3">
-        <button
-          onClick={onSave}
-          disabled={!canSave}
-          className="flex-1 rounded-lg bg-green-600 px-4 py-3 text-lg font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-gray-300"
-        >
-          Save pin
-        </button>
-        <button
-          onClick={onCancel}
-          className="flex-1 rounded-lg border-2 border-gray-300 px-4 py-3 text-lg font-semibold text-gray-700 hover:bg-gray-100"
-        >
-          Cancel
-        </button>
+          <button
+            onClick={onSave}
+            disabled={!canSave}
+            className="flex-1 rounded-lg bg-green-600 px-4 py-3 text-lg font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-gray-300"
+          >
+            Add customer
+          </button>
+          <button
+            onClick={onCancel}
+            className="flex-1 rounded-lg border-2 border-gray-300 px-4 py-3 text-lg font-semibold text-gray-700 hover:bg-gray-100"
+          >
+            Cancel
+          </button>
         </div>
       </div>
     </div>

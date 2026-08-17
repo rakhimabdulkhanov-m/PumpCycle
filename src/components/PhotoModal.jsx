@@ -33,9 +33,11 @@ export default function PhotoModal({ photo, onClose, onArchive }) {
           type="button"
           onClick={onClose}
           aria-label="Close photo"
-          className="flex min-h-11 min-w-11 items-center justify-center rounded-full bg-white/20 text-3xl leading-none text-white hover:bg-white/30 active:bg-white/40"
+          className="flex min-h-11 min-w-11 items-center justify-center rounded-full bg-white/20 text-white hover:bg-white/30 active:bg-white/40"
         >
-          &times;
+          <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
+          </svg>
         </button>
       </div>
 

@@ -13,7 +13,7 @@ export default function Topbar({ demo = false, onGetThis, onSignOut }) {
         {demo && (
           <button
             onClick={onGetThis}
-            className="rounded-lg bg-blue-700 px-3.5 py-1.5 text-sm font-semibold text-white hover:bg-blue-800 sm:px-5 sm:py-2.5 sm:text-lg"
+            className="flex min-h-10 items-center rounded-lg bg-blue-700 px-3.5 py-2 text-sm font-semibold text-white hover:bg-blue-800 sm:px-5 sm:py-2.5 sm:text-lg"
           >
             Get this for your company
           </button>

@@ -117,11 +117,11 @@ export function withUniqueIds(customers) {
 // location helpers never pulls the demo seed into a live bundle.
 export { hasLocation }
 
-const MOCK_LID_PHOTO_1 =
-  'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><rect width="800" height="600" fill="%234b5563"/><circle cx="400" cy="300" r="180" fill="%231f2937" stroke="%239ca3af" stroke-width="8"/><circle cx="400" cy="300" r="140" fill="%23374151"/><circle cx="340" cy="300" r="12" fill="%239ca3af"/><circle cx="460" cy="300" r="12" fill="%239ca3af"/><text x="400" y="308" font-family="sans-serif" font-size="20" font-weight="bold" fill="%23e5e7eb" text-anchor="middle">SEPTIC TANK ACCESS</text><text x="400" y="540" font-family="sans-serif" font-size="24" fill="%23f3f4f6" text-anchor="middle">18in depth under rear turf</text></svg>'
-
-const MOCK_LID_PHOTO_2 =
-  'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><rect width="800" height="600" fill="%23365314"/><circle cx="400" cy="320" r="160" fill="%2314532d" stroke="%2386efac" stroke-width="6"/><rect x="300" y="100" width="200" height="40" rx="8" fill="%231e293b"/><text x="400" y="126" font-family="sans-serif" font-size="16" fill="%23f8fafc" text-anchor="middle">HOUSE FOUNDATION (8 FT)</text><text x="400" y="326" font-family="sans-serif" font-size="18" font-weight="bold" fill="%23dcfce7" text-anchor="middle">GREEN RISER LID</text><text x="400" y="550" font-family="sans-serif" font-size="22" fill="%23f0fdf4" text-anchor="middle">Lid flush with grass near AC unit</text></svg>'
+import demoLid1 from '../assets/demo-photos/lid-1.jpg'
+import demoLid2 from '../assets/demo-photos/lid-2.jpg'
+import demoLid3 from '../assets/demo-photos/lid-3.jpg'
+import demoLid4 from '../assets/demo-photos/lid-4.jpg'
+import demoLid5 from '../assets/demo-photos/lid-5.jpg'
 
 export function generateDemoVisits(customers) {
   const visits = []
@@ -145,31 +145,40 @@ export function generateDemoVisits(customers) {
 
 export function generateDemoPhotos(customers) {
   const photos = []
-  if (customers.length > 0) {
-    photos.push({
-      id: `p_${customers[0].id}_1`,
-      customerId: customers[0].id,
-      visitId: `v_${customers[0].id}_1`,
-      dataUrl: MOCK_LID_PHOTO_1,
+  const demoImages = [
+    {
+      img: demoLid1,
+      caption: 'Green Polylok riser flush with lawn by AC unit',
+    },
+    {
+      img: demoLid2,
       caption: 'Main concrete access lid excavated (18in depth)',
-      width: 800,
-      height: 600,
-      bytes: 45000,
-      blobState: 'stored',
-      archivedAt: null,
-      createdAt: 1723507200000,
-    })
-  }
-  if (customers.length > 1) {
+    },
+    {
+      img: demoLid3,
+      caption: 'Dual green riser covers by fence line',
+    },
+    {
+      img: demoLid4,
+      caption: 'Commercial grease trap access cover',
+    },
+    {
+      img: demoLid5,
+      caption: 'Pumping service in progress with suction hose',
+    },
+  ]
+
+  for (let i = 0; i < Math.min(customers.length, demoImages.length); i++) {
+    const c = customers[i]
     photos.push({
-      id: `p_${customers[1].id}_1`,
-      customerId: customers[1].id,
-      visitId: null,
-      dataUrl: MOCK_LID_PHOTO_2,
-      caption: 'Green riser lid 8ft from AC unit',
-      width: 800,
-      height: 600,
-      bytes: 48000,
+      id: `p_${c.id}_1`,
+      customerId: c.id,
+      visitId: `v_${c.id}_1`,
+      dataUrl: demoImages[i].img,
+      caption: demoImages[i].caption,
+      width: 1600,
+      height: 1200,
+      bytes: 180000,
       blobState: 'stored',
       archivedAt: null,
       createdAt: 1723507200000,

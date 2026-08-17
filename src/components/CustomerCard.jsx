@@ -188,15 +188,14 @@ export default function CustomerCard({
   const dueLabel = !Number.isFinite(days)
     ? 'Pump date unknown'
     : status === 'overdue'
-      ? `${formatDate(nextDue(customer))} — ${-days} days overdue`
-      : `${formatDate(nextDue(customer))} — in ${days} days`
+      ? `${formatDate(nextDue(customer))} - ${-days} days overdue`
+      : `${formatDate(nextDue(customer))} - in ${days} days`
 
   const customerVisits = visits
     .filter((v) => v.customerId === customer.id && !v.archivedAt)
     .sort((a, b) => (b.visitedOn || '').localeCompare(a.visitedOn || ''))
 
   const customerPhotos = photos.filter((p) => p.customerId === customer.id && !p.archivedAt)
-  const standalonePhotos = customerPhotos.filter((p) => !p.visitId)
 
   const navData =
     userPosition && hasLocation(customer)
@@ -350,9 +349,11 @@ export default function CustomerCard({
         <button
           onClick={() => confirmDiscardIfDirty(onClose)}
           aria-label="Close"
-          className="flex min-h-11 min-w-11 -mr-2 -mt-2 items-center justify-center rounded-lg text-3xl leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+          className="flex min-h-11 min-w-11 -mr-2 -mt-2 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600"
         >
-          &times;
+          <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
+          </svg>
         </button>
       </div>
 
@@ -429,7 +430,7 @@ export default function CustomerCard({
                   </a>
                 </div>
               ) : (
-                <span className="text-gray-400">—</span>
+                <span className="text-gray-400">-</span>
               )}
             </Row>
             <Row label="Email">
@@ -438,7 +439,7 @@ export default function CustomerCard({
                   {customer.email}
                 </a>
               ) : (
-                <span className="text-gray-400">—</span>
+                <span className="text-gray-400">-</span>
               )}
             </Row>
             <Row label="Tank size">{customer.tankSizeGal.toLocaleString()} gal</Row>
@@ -455,7 +456,7 @@ export default function CustomerCard({
                 {dueLabel}
               </span>
             </Row>
-            <Row label="Notes">{customer.notes || '—'}</Row>
+            <Row label="Notes">{customer.notes || '-'}</Row>
 
             {/* Offline Lid Navigation / GPS Finder */}
             {hasLocation(customer) && (
@@ -531,7 +532,7 @@ export default function CustomerCard({
               </div>
             )}
 
-            {/* Standalone Lid Photos Preview */}
+            {/* Standalone & Visit Lid Photos Preview */}
             <div className="py-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium uppercase tracking-wide text-gray-500">
@@ -546,7 +547,7 @@ export default function CustomerCard({
                 </button>
               </div>
               <PhotoStrip
-                photos={standalonePhotos}
+                photos={customerPhotos}
                 onSelectPhoto={setActivePhoto}
                 onAddPhotoClick={() => triggerPhotoCapture(null)}
               />
@@ -555,7 +556,7 @@ export default function CustomerCard({
             {status === 'overdue' && (customer.phone || customer.email) && (
               <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg bg-red-50 px-3 py-2">
                 <span className="text-base font-semibold text-red-800">
-                  Overdue — reach out:
+                  Overdue - reach out:
                 </span>
                 {customer.phone && (
                   <>

@@ -105,9 +105,11 @@ function PreviewPanel({
         <button
           onClick={onClose}
           aria-label="Close"
-          className="text-3xl leading-none text-gray-400 hover:text-gray-600"
+          className="flex min-h-11 min-w-11 -mr-2 -mt-2 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600"
         >
-          &times;
+          <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12" />
+          </svg>
         </button>
       </div>
 
@@ -115,6 +117,18 @@ function PreviewPanel({
         <p className="text-base text-gray-600">
           You text this one. Due {formatDate(nextDue(customer))}.
         </p>
+
+        {customer.phone && (
+          <div className="mt-2 flex items-center gap-2 text-base text-gray-800">
+            <span className="text-sm font-medium uppercase tracking-wide text-gray-500">Phone:</span>
+            <a
+              href={`tel:${customer.phone}`}
+              className="font-bold text-blue-700 underline"
+            >
+              {customer.phone}
+            </a>
+          </div>
+        )}
 
         <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
           <div className="text-sm font-medium uppercase tracking-wide text-gray-500">
@@ -491,7 +505,7 @@ export default function RemindersTab({
           customer={selectedCustomer}
           warning={warning}
           saving={saving}
-          company={settings?.companyName || company || 'PumpCycle'}
+          company={settings?.companyName || company || 'Hawkins Septic Co'}
           phone={settings?.companyPhone || ''}
           onMarkSent={() => markSent(selected, selectedCustomer)}
           onCopy={copyMessage}

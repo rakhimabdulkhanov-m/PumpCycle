@@ -286,7 +286,7 @@ function ScaleMarkers({ points, statusVisibility, directCustomerId, placing, onS
           if (!current.placing) circle.on('click', () => zoomIntoCluster(map, cluster))
           canvasLayers.addLayer(circle)
         }
-      } else if (zoom <= 16) {
+      } else if (zoom <= 15) {
         mode = 'points'
         visualCount = visible.length
         const drawOrder = { ok: 0, 'due-soon': 1, overdue: 2 }
@@ -295,13 +295,13 @@ function ScaleMarkers({ points, statusVisibility, directCustomerId, placing, onS
           const unsettled = point.unconfirmed
           const circle = L.circleMarker([point.lat, point.lng], {
             renderer,
-            radius: 6,
+            radius: 10,
             color: unsettled ? MAP_STATUS_COLORS[point.status] : 'white',
-            weight: unsettled ? 3 : 2,
+            weight: unsettled ? 3 : 2.5,
             dashArray: unsettled ? '4 3' : undefined,
             fillColor: unsettled ? 'white' : MAP_STATUS_COLORS[point.status],
-            fillOpacity: point.status === 'ok' ? 0.42 : 0.9,
-            opacity: point.status === 'ok' ? 0.68 : 1,
+            fillOpacity: 1.0,
+            opacity: 1.0,
             interactive: !current.placing,
           })
           if (!current.placing) circle.on('click', () => current.onSelect(point.id))
@@ -566,8 +566,9 @@ export default function MapTab({
   // held while his name and service type are typed. For an existing customer
   // there is no such gap: Save writes.
   const [newPoint, setNewPoint] = useState(null)
-  const [draftType, setDraftType] = useState(null) // 'residential'|'commercial'|null
+  const [draftType, setDraftType] = useState('residential') // 'residential'|'commercial'
   const [draftName, setDraftName] = useState('')
+  const [draftPhone, setDraftPhone] = useState('')
   const [draftAddress, setDraftAddress] = useState('')
   // {message} | {message, undo:{id, patch}} - the undo carries VALUES, not a
   // closure over the state at save time, so pressing it ten seconds later
@@ -678,8 +679,9 @@ export default function MapTab({
     setSelectedId(null) // close any open customer card
     setListOpen(false)
     setNewPoint(null)
-    setDraftType(null)
+    setDraftType('residential')
     setDraftName('')
+    setDraftPhone('')
     setDraftAddress('')
     setPlacing({
       ...next,
@@ -704,8 +706,9 @@ export default function MapTab({
   function resetPlacing() {
     setPlacing(null)
     setNewPoint(null)
-    setDraftType(null)
+    setDraftType('residential')
     setDraftName('')
+    setDraftPhone('')
     setDraftAddress('')
   }
 
@@ -767,19 +770,19 @@ export default function MapTab({
     setWriteBusy(true)
     try {
       await onAddCustomer({
-      name: draftName,
-      address: draftAddress,
-      phone: '',
-      email: '',
-      // Aimed at by hand on the satellite image, which is the strongest signal
-      // this app has about where a lid actually is.
-      ...manualLocationPatch(newPoint),
-      tankSizeGal: 1000,
-      lastPumped: todayISO(),
-      cycleMonths: draftType === 'residential' ? 36 : 3,
-      notes: '',
+        name: draftName.trim(),
+        address: draftAddress.trim(),
+        phone: draftPhone.trim(),
+        email: '',
+        // Aimed at by hand on the satellite image, which is the strongest signal
+        // this app has about where a lid actually is.
+        ...manualLocationPatch(newPoint),
+        tankSizeGal: 1000,
+        lastPumped: todayISO(),
+        cycleMonths: draftType === 'commercial' ? 3 : 36,
+        notes: '',
       })
-      setToast({ message: `Lid pinned for ${draftName}` })
+      setToast({ message: `Lid pinned for ${draftName.trim()}` })
       resetPlacing()
     } catch {
       setToast({ message: 'Could not save this customer. Try again.' })
@@ -821,6 +824,7 @@ export default function MapTab({
           ref={mapRef}
           center={initialView.center}
           zoom={initialView.zoom}
+          maxZoom={21}
           className="h-full w-full"
           scrollWheelZoom
           // A second click on the save button lands here once the modal closes;
@@ -839,14 +843,15 @@ export default function MapTab({
             onShow={showNavigation}
             onPlace={placeNavigation}
           />
-          <LayersControl position="topleft">
+          <LayersControl position="topright">
             <LayersControl.BaseLayer checked name="Satellite">
               <TileLayer
                 ref={satelliteRef}
                 key="satellite"
                 url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
                 attribution="Tiles &copy; Esri"
-                maxZoom={19}
+                maxNativeZoom={19}
+                maxZoom={21}
               />
             </LayersControl.BaseLayer>
             <LayersControl.BaseLayer name="Map">
@@ -855,6 +860,8 @@ export default function MapTab({
                 key="street"
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                maxNativeZoom={19}
+                maxZoom={21}
               />
             </LayersControl.BaseLayer>
           </LayersControl>
@@ -889,7 +896,7 @@ export default function MapTab({
             title="Locate my position (GPS)"
             aria-label="Locate my position (GPS)"
             className={
-              'absolute top-36 left-2.5 z-[1000] flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-gray-300 bg-white p-2.5 shadow-md hover:bg-gray-50 disabled:opacity-50 ' +
+              'absolute top-14 right-2.5 z-[1000] flex min-h-11 min-w-11 items-center justify-center rounded-lg border border-gray-300 bg-white p-2.5 shadow-md hover:bg-gray-50 disabled:opacity-50 ' +
               (locating ? 'text-blue-600' : 'text-gray-700')
             }
           >
@@ -972,9 +979,11 @@ export default function MapTab({
           onPickType={setDraftType}
           name={draftName}
           onName={setDraftName}
+          phone={draftPhone}
+          onPhone={setDraftPhone}
           address={draftAddress}
           onAddress={setDraftAddress}
-          canSave={draftName.trim() !== '' && draftType !== null}
+          canSave={draftName.trim() !== ''}
           onSave={saveNewCustomer}
           onBack={() => setNewPoint(null)}
           onCancel={cancelPlacing}
